@@ -99,22 +99,40 @@ MENU_XML = """
 class Obxml2:
     def __init__( self, filename):
         ET.register_namespace('', "http://openbox.org/")
-        self.xml = ET.parse(filename)
-        self.fname = filename
-        self.root = self.xml.getroot()       
-        self.write( 'menu2.xml')
-        self.dirty = False
+        if filename is not None:
+            self.open(filename)
 
     def strip_ns( self, tag ):
         _, _, stag = tag.rpartition('}')
         return stag
 
+    def open( self, filename ):
+        self.xml = ET.parse(filename)
+        self.fname = filename
+        self.root = self.xml.getroot()       
+        self.dirty = False       
+
     def save( self ):
-        self.write( self.fname )
+        if self.fname is None or self.fname == "":
+            return False
+        else:
+            self.write( self.fname )
+            return True
 
     def write( self, filename ):
         self.xml.write(filename, "utf-8", True, '' )
         self.fname = filename
+        self.dirty = False
+
+    def clear( self ):
+        self.fname = ""
+        self.xml = ET.ElementTree(ET.fromstring(
+"""<?xml version='1.0' encoding='utf-8'?>
+<openbox_menu xmlns="http://openbox.org/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://openbox.org/                 file:///usr/share/openbox/menu.xsd">
+<menu id="root-menu" label="Openbox Menu">
+</menu>
+</openbox_menu>"""))
+        self.root = self.xml.getroot()       
         self.dirty = False
 
     def is_dirty( self ):
@@ -122,7 +140,6 @@ class Obxml2:
 
     def parse( self, menu_treestore ):
         self.parse_submenu( menu_treestore, None, self.root )
-        self.dirty = True
 
     def parse_submenu(self, menu_treestore, parent_iter, submenu):
         for child in submenu:
@@ -146,9 +163,11 @@ class Obxml2:
         menu_treestore.append( parent_iter, [ self.get_label( link ), self.strip_ns(link.tag), "Link", "", link  ] )
 
     def parse_item( self, menu_treestore,parent_iter, item ):
-        if ( len(item.getchildren()) == 1 ):
+        if ( len(list(item)) == 1 ):
             if item[0].tag == "{http://openbox.org/}action":
                 self.parse_action( menu_treestore, parent_iter, item.get('label'), self.strip_ns(item.tag), item[0] )
+        elif ( len(item.getchildren()) == 0 ):
+            piter = menu_treestore.append( parent_iter, [item.get('label'), self.strip_ns(item.tag), "Execute", "", item ] )
         else:
             piter = menu_treestore.append( parent_iter, [item.get('label'), self.strip_ns(item.tag), "Multiple Execute", "", item ] )
             for action in item:
@@ -156,7 +175,7 @@ class Obxml2:
 
     def parse_action( self,menu_treestore, parent_iter, item_label, item_type, action ):
         execute_text = ""
-        if len(action.getchildren()) == 1:
+        if len(list(action)) == 1:
             if action[0].tag == "{http://openbox.org/}execute":
                 execute_text = action[0].text.rstrip().lstrip()
             #elif parse the rest of the possible types
@@ -170,8 +189,10 @@ class Obxml2:
     
     def set_id( self, item, id_string ):
         if item.tag == "{http://openbox.org/}menu":
-            item.set('id', id_string )
-            self.dirty = True
+            if item.get('id') != id_string:
+                item.set('id', id_string )
+                self.dirty = True
+                print("set_id")
 
     def get_label( self, link ):
         if link.tag == "{http://openbox.org/}menu":
@@ -196,22 +217,74 @@ class Obxml2:
 
     def set_label( self, item, label ):
         if item.tag == "{http://openbox.org/}item":
-            item.set('label', label)
-            self.dirty = True
-        if item.tag == "{http://openbox.org/}menu":
-            if item.get('label') is not None:
+            if item.get('label') != label:
                 item.set('label', label)
                 self.dirty = True
+        if item.tag == "{http://openbox.org/}menu":
+            if item.get('label') is not None:
+                if item.get('label') != label:
+                    item.set('label', label)
+                    self.dirty = True
 
     def set_execute( self, item, execute_text ):
         if item.tag == "{http://openbox.org/}action":
-            if len(item.getchildren()) == 1:
-                item[0].text = execute_text
-                self.dirty = True
+            if len(list(item)) == 1:
+                if item[0].text != execute_text:
+                    item[0].text = execute_text
+                    self.dirty = True
         elif item.tag == "{http://openbox.org/}menu":
             if item.get('execute') is not None:
-                item.set('execute', execute_text )
-                self.dirty = True
+                if item.text != execute_text:
+                    item.set('execute', execute_text )
+                    self.dirty = True
+
+    def find_in_children( self, submenu, node ):
+        for child in submenu:
+            if child == node:
+                return submenu
+            else:
+                if len(list(child)) > 0:
+                    ref = self.find_in_children( child, node )
+                    if ref is not None:
+                        return ref
+        return None
+
+    def get_parent( self, child ):
+        return self.find_in_children( self.root, child )
+
+    def delete_node( self, item ):
+        print("shall remove: " + item.tag )
+        p = self.get_parent( item )
+        if item.tag == "{http://openbox.org/}action" and len(list(p)) == 1:
+            parent = self.get_parent( p )
+            item = p
+        else:
+            parent = p
+
+        if parent is not None:
+           parent.remove( item )
+
+    def insert_separator_below( self, item ):
+        inserted_item = None
+        parent = self.get_parent( item )
+        if ( item.tag == "{http://openbox.org/}menu" and (len(list(item)) == 0 or parent == self.root )) and ( item.get('label') is not None ) and ( item.get('execute') is None ):
+           item.append( ET.Element("{http://openbox.org/}separator") )
+           inserted_item = list(item)[len(list(item))-1]
+           self.dirty = True
+        else:
+           parent = self.get_parent( item )
+           if item.tag == "{http://openbox.org/}action":
+               item = parent
+               parent = self.get_parent( item )
+
+           if parent is not None:
+               current_index = list(parent).index(item)
+               parent.insert( current_index + 1, ET.Element("{http://openbox.org/}separator") )
+               inserted_item = list(parent)[current_index + 1]
+               self.dirty = True
+
+        return inserted_item
+
 
 
 class Obmenu2Window(Gtk.ApplicationWindow):
@@ -314,6 +387,39 @@ class Obmenu2Window(Gtk.ApplicationWindow):
 
     def on_search_execute_clicked(self, widget):
         """ serach clicked """
+        dialog = Gtk.FileChooserDialog(
+            title="Please choose a file",
+            parent=self,
+            action=Gtk.FileChooserAction.OPEN,
+        )
+        dialog.add_buttons( Gtk.STOCK_CANCEL,
+                            Gtk.ResponseType.CANCEL,
+                            Gtk.STOCK_OK,
+                            Gtk.ResponseType.OK )
+        self.add_filter_any(dialog)
+
+        response = dialog.run()
+        if response == Gtk.ResponseType.OK:
+            print("Open clicked")
+            print("File selected: " + dialog.get_filename())
+            self.entry_edit_execute.set_text( dialog.get_filename() )
+        elif response == Gtk.ResponseType.CANCEL:
+            print("Cancel clicked")
+
+        dialog.destroy()
+
+    def add_filter_any(self, dialog):
+        filter_any = Gtk.FileFilter()
+        filter_any.set_name("Any files")
+        filter_any.add_pattern("*")
+        dialog.add_filter(filter_any)
+
+    def add_filter_xml(self, dialog):
+        filter_xml = Gtk.FileFilter()
+        filter_xml.set_name("XML files")
+        filter_xml.add_mime_type("text/xml")
+        dialog.add_filter(filter_xml)
+
 
     def on_cursor_changed( self, selection ):
         # ...
@@ -384,31 +490,101 @@ class Obmenu2Window(Gtk.ApplicationWindow):
         else:
             print("nothing")
 
+    def request_discard(self):
+        dialog = Gtk.MessageDialog(
+            parent=self,
+            flags=0,
+            message_type=Gtk.MessageType.QUESTION,
+            buttons=Gtk.ButtonsType.YES_NO,
+            text="You have unsaved changes!",
+        )
+        dialog.format_secondary_text(
+            "Do you want to discard the changes?"
+        )
+        
+        shall_discard = False
+        response = dialog.run()
+        if response == Gtk.ResponseType.YES:
+            shall_discard = True
+        elif response == Gtk.ResponseType.NO:
+            shall_discard = False
+
+        dialog.destroy()
+        return shall_discard
+
     def on_new_menu(self, widget=None):
-        print('will popup preferences dialog')
-   #     if self.omenu.is_dirty:
-            #ask for save
-        #discard current
+        if self.omenu.is_dirty():
+            if self.request_discard():
+                self.omenu.clear()
+                self.menu_treestore.clear()
+                self.omenu.parse( self.menu_treestore )
+        else:
+            self.omenu.clear()
+            self.menu_treestore.clear()
+            self.omenu.parse( self.menu_treestore )
 
     def on_open_menu(self, widget=None):
-        print('will popup preferences dialog')
-    #    if self.omenu.is_dirty:
-            #ask for save
-     #   else:
-            #discard current
+        if self.omenu.is_dirty():
+            if self.request_discard() == False:
+                return
+
         #show file picker
-        #load selected
+        dialog = Gtk.FileChooserDialog(
+            title="Please choose a file",
+            parent=self,
+            action=Gtk.FileChooserAction.OPEN,
+        )
+        dialog.add_buttons( Gtk.STOCK_CANCEL,
+                            Gtk.ResponseType.CANCEL,
+                            Gtk.STOCK_OPEN,
+                            Gtk.ResponseType.OK )
+        self.add_filter_xml(dialog)
+        self.add_filter_any(dialog)
+
+        response = dialog.run()
+        if response == Gtk.ResponseType.OK:
+            print("Open clicked")
+            print("File selected: " + dialog.get_filename())
+            #load selected
+            self.omenu.open( dialog.get_filename() )
+            self.menu_treestore.clear()
+            self.omenu.parse( self.menu_treestore )
+        elif response == Gtk.ResponseType.CANCEL:
+            print("Cancel clicked")
+
+        dialog.destroy()
+
 
     def on_save_menu(self, widget=None):
-        print('save menu')
-        #save current
-        self.omenu.save()
+        if self.omenu.save() == False:
+            self.on_save_as_menu()
 
     def on_save_as_menu(self, widget=None):
-        print('will saveas menu')
-        #show file picker
-        #save current
-        self.omenu.write( 'menu2.xml' )
+        dialog = Gtk.FileChooserDialog(
+            title="Please choose a file",
+            parent=self,
+            action=Gtk.FileChooserAction.SAVE,
+        )
+        dialog.add_buttons( Gtk.STOCK_CANCEL,
+                            Gtk.ResponseType.CANCEL,
+                            Gtk.STOCK_SAVE,
+                            Gtk.ResponseType.OK )
+        dialog.set_current_name("menu.xml")
+        dialog.set_do_overwrite_confirmation(True)
+
+        self.add_filter_xml(dialog)
+        self.add_filter_any(dialog)
+
+        response = dialog.run()
+        if response == Gtk.ResponseType.OK:
+            print("Save clicked")
+            print("File selected: " + dialog.get_filename())
+            #save current
+            self.omenu.write( dialog.get_filename()  )
+        elif response == Gtk.ResponseType.CANCEL:
+            print("Cancel clicked")
+
+        dialog.destroy()
 
     def on_move_item_up(self, widget=None):
         print('will move item up')
@@ -420,7 +596,13 @@ class Obmenu2Window(Gtk.ApplicationWindow):
 
     def on_delete_item(self, widget=None):
         print('will delete item')
-        #delete selected item from tree
+        selection = self.treeview.get_selection()
+        _, paths = selection.get_selected_rows()
+        for path in paths:
+            iter = self.menu_treestore.get_iter(path)
+            self.omenu.delete_node( self.selected_model[self.selected_index][4] )
+            self.menu_treestore.remove(iter)
+
 
     def on_add_menu(self, widget=None):
         print('will add new menu item')
@@ -433,6 +615,14 @@ class Obmenu2Window(Gtk.ApplicationWindow):
 
     def on_add_separator(self, widget=None):
         print('will add new separator')
+        separator_node = self.omenu.insert_separator_below( self.selected_model[self.selected_index][4] )
+        if separator_node is not None:
+            selection = self.treeview.get_selection()
+            _, paths = selection.get_selected_rows()
+            for path in paths:
+                iter = self.menu_treestore.get_iter(path)
+                self.menu_treestore.insert_after( None, iter, [separator_node.get('label'), self.omenu.strip_ns(separator_node.tag), "", "", separator_node ] )
+
 
     def on_add_pipemenu(self, widget=None):
         print('will add new pipemenu')
@@ -464,7 +654,7 @@ class Application(Gtk.Application):
         super().__init__(
             *args,
             application_id="org.openbox.obmenu2",
-            flags=Gio.ApplicationFlags.HANDLES_COMMAND_LINE,
+            flags=Gio.ApplicationFlags.NON_UNIQUE,
             **kwargs
         )
         self.window = None
