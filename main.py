@@ -1,7 +1,8 @@
 #!/usr/bin/python3.7
 import sys
-import gi
+import random
 
+import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import GLib, Gio, Gtk, GObject
 
@@ -166,7 +167,7 @@ class Obxml2:
         if ( len(list(item)) == 1 ):
             if item[0].tag == "{http://openbox.org/}action":
                 self.parse_action( menu_treestore, parent_iter, item.get('label'), self.strip_ns(item.tag), item[0] )
-        elif ( len(item.getchildren()) == 0 ):
+        elif ( len(list(item)) == 0 ):
             piter = menu_treestore.append( parent_iter, [item.get('label'), self.strip_ns(item.tag), "Execute", "", item ] )
         else:
             piter = menu_treestore.append( parent_iter, [item.get('label'), self.strip_ns(item.tag), "Multiple Execute", "", item ] )
@@ -176,7 +177,7 @@ class Obxml2:
     def parse_action( self,menu_treestore, parent_iter, item_label, item_type, action ):
         execute_text = ""
         if len(list(action)) == 1:
-            if action[0].tag == "{http://openbox.org/}execute":
+            if action[0].tag == "{http://openbox.org/}execute" and action[0].text is not None:
                 execute_text = action[0].text.rstrip().lstrip()
             #elif parse the rest of the possible types
         menu_treestore.append( parent_iter, [item_label, item_type, action.get('name'), execute_text, action ] )
@@ -220,11 +221,16 @@ class Obxml2:
             if item.get('label') != label:
                 item.set('label', label)
                 self.dirty = True
-        if item.tag == "{http://openbox.org/}menu":
+        elif item.tag == "{http://openbox.org/}action":
+            self.set_label( self.get_parent( item ), label )
+        elif item.tag == "{http://openbox.org/}menu":
             if item.get('label') is not None:
                 if item.get('label') != label:
                     item.set('label', label)
                     self.dirty = True
+            else:
+                item.set('label', label)
+                self.dirty = True
 
     def set_execute( self, item, execute_text ):
         if item.tag == "{http://openbox.org/}action":
@@ -252,6 +258,7 @@ class Obxml2:
     def get_parent( self, child ):
         return self.find_in_children( self.root, child )
 
+
     def delete_node( self, item ):
         print("shall remove: " + item.tag )
         p = self.get_parent( item )
@@ -264,11 +271,11 @@ class Obxml2:
         if parent is not None:
            parent.remove( item )
 
-    def insert_separator_below( self, item ):
+    def insert_node_below( self, item, node_tag, allow_root=False ):
         inserted_item = None
         parent = self.get_parent( item )
-        if ( item.tag == "{http://openbox.org/}menu" and (len(list(item)) == 0 or parent == self.root )) and ( item.get('label') is not None ) and ( item.get('execute') is None ):
-           item.append( ET.Element("{http://openbox.org/}separator") )
+        if ( item.tag == "{http://openbox.org/}menu" and (len(list(item)) == 0 or parent == self.root )) and ( item.get('label') is not None ) and ( item.get('execute') is None ) and ( allow_root is False ):
+           item.append( ET.Element( node_tag ) )
            inserted_item = list(item)[len(list(item))-1]
            self.dirty = True
         else:
@@ -276,16 +283,107 @@ class Obxml2:
            if item.tag == "{http://openbox.org/}action":
                item = parent
                parent = self.get_parent( item )
-
            if parent is not None:
                current_index = list(parent).index(item)
-               parent.insert( current_index + 1, ET.Element("{http://openbox.org/}separator") )
+               parent.insert( current_index + 1, ET.Element( node_tag ) )
                inserted_item = list(parent)[current_index + 1]
                self.dirty = True
-
         return inserted_item
 
+    def init_item( self, item ):
+        self.set_label( item, "New Item" )
+        init_action = ET.Element( "{http://openbox.org/}action" )
+        init_action.set('name', "Execute")
+        init_action.append( ET.Element( "{http://openbox.org/}execute" ) )
+        item.append( init_action )       
 
+    def insert_item_below( self, item ):
+        inserted_item = self.insert_node_below( item, "{http://openbox.org/}item" )
+        if inserted_item is not None:
+            self.init_item( inserted_item )
+        return inserted_item
+
+    def insert_link_below( self, item ):
+        inserted_item = self.insert_node_below( item, "{http://openbox.org/}menu" )
+        if inserted_item is not None:
+            self.set_id( inserted_item, "None" )
+        return inserted_item
+
+    def insert_pipe_below( self, item ):
+        inserted_item = self.insert_node_below( item, "{http://openbox.org/}menu" )
+        if inserted_item is not None:
+            self.set_id( inserted_item, "pipe-" + str(random.randrange(33333,9999999)) )
+            self.set_label( inserted_item, "New Pipemenu" )
+            inserted_item.set('execute', "command" )
+        return inserted_item
+
+    def insert_menu_below( self, item ):
+        inserted_item = self.insert_node_below( item, "{http://openbox.org/}menu", True )
+        if inserted_item is not None:
+            self.set_id( inserted_item, "menu-" + str(random.randrange(33333,9999999)) )
+            self.set_label( inserted_item, "New Menu" )
+            init_item = ET.Element("{http://openbox.org/}item")
+            self.init_item( init_item )
+            inserted_item.append( init_item )
+        return inserted_item
+
+    def insert_separator_below( self, item ):
+        inserted_item = self.insert_node_below( item, "{http://openbox.org/}separator" )
+        return inserted_item
+
+    def add_separator( self, item, menu_treestore, menu_treestore_iter ):
+        separator_node = self.insert_separator_below( item )
+        if separator_node is not None:
+            menu_treestore.insert_after( None, menu_treestore_iter, [self.get_label(separator_node), self.strip_ns(separator_node.tag), "", "", separator_node ] )
+            self.dirty = True
+
+    def add_item( self, item, menu_treestore, menu_treestore_iter ):
+        item_node = self.insert_item_below( item )
+        if item_node is not None:
+            menu_treestore.insert_after( None, menu_treestore_iter, [self.get_label(item_node), self.strip_ns(item_node.tag), item_node[0].get('name'), "", item_node[0] ] )
+            self.dirty = True
+
+    def add_link( self, item, menu_treestore, menu_treestore_iter ):
+        link_node = self.insert_link_below( item )
+        if link_node is not None:
+            menu_treestore.insert_after( None, menu_treestore_iter, [self.get_label(link_node), self.strip_ns(link_node.tag), "", "", link_node ] )
+            self.dirty = True
+
+    def add_pipemenu( self, item, menu_treestore, menu_treestore_iter ):
+        node = self.insert_pipe_below( item )
+        if node is not None:
+            menu_treestore.insert_after( None, menu_treestore_iter, [self.get_label(node), 'pipemenu', "Execute", node.get('execute'), node ] )
+            self.dirty = True
+
+    def add_menu( self, item, menu_treestore, menu_treestore_iter ):
+        node = self.insert_menu_below( item )
+        if node is not None:
+            piter = menu_treestore.insert_after( None, menu_treestore_iter, [self.get_label(node), self.strip_ns(node.tag), "", "", node ] )
+            self.parse_item( menu_treestore, piter, node[0] )
+            self.dirty = True
+
+    def move_up( self, item ):
+        parent = self.get_parent( item )
+        if item.tag == "{http://openbox.org/}action":
+            item = parent
+            parent = self.get_parent( item )
+        if parent is not None:
+            current_index = list(parent).index(item)
+            if current_index > 0:
+                previous_item = list(parent)[current_index-1]
+                parent.remove( previous_item )
+                parent.insert( current_index, previous_item )
+
+    def move_down( self, item ):
+        parent = self.get_parent( item )
+        if item.tag == "{http://openbox.org/}action":
+            item = parent
+            parent = self.get_parent( item )
+        if parent is not None:
+            current_index = list(parent).index(item)
+            if current_index < len(list(parent))-1:
+                parent.remove( item )
+                parent.insert( current_index+1, item )
 
 class Obmenu2Window(Gtk.ApplicationWindow):
     def __init__(self, *args, **kwargs):
@@ -384,6 +482,17 @@ class Obmenu2Window(Gtk.ApplicationWindow):
 
         self.show_all()
 
+    
+    def get_selected_store_iter(self):
+        selection = self.treeview.get_selection()
+        _, paths = selection.get_selected_rows()
+        iter = None
+        for path in paths:
+            iter = self.menu_treestore.get_iter(path)
+        return iter
+
+    def get_iter_object(self, store_iter):
+        return self.menu_treestore.get_value(store_iter, 4)
 
     def on_search_execute_clicked(self, widget):
         """ serach clicked """
@@ -587,48 +696,56 @@ class Obmenu2Window(Gtk.ApplicationWindow):
         dialog.destroy()
 
     def on_move_item_up(self, widget=None):
-        print('will move item up')
-        #modify selected item in tree
+        store_iter = self.get_selected_store_iter()
+        if store_iter is not None:
+            previous_iter = self.menu_treestore.iter_previous( store_iter )
+            if previous_iter is not None:
+                self.omenu.move_up( self.get_iter_object(store_iter) )
+                self.menu_treestore.move_before( store_iter, previous_iter )
 
     def on_move_item_down(self, widget=None):
-        print('will move item down')
-        #modify selected item in tree
+        store_iter = self.get_selected_store_iter()
+        if store_iter is not None:
+            next_iter = self.menu_treestore.iter_next( store_iter )
+            if next_iter is not None:
+                self.omenu.move_down( self.get_iter_object(store_iter) )
+                self.menu_treestore.move_after( store_iter, next_iter )
 
     def on_delete_item(self, widget=None):
-        print('will delete item')
-        selection = self.treeview.get_selection()
-        _, paths = selection.get_selected_rows()
-        for path in paths:
-            iter = self.menu_treestore.get_iter(path)
-            self.omenu.delete_node( self.selected_model[self.selected_index][4] )
-            self.menu_treestore.remove(iter)
-
+        store_iter = self.get_selected_store_iter()
+        if store_iter is not None:
+            self.omenu.delete_node( self.get_iter_object(store_iter) )
+            self.menu_treestore.remove(store_iter)
 
     def on_add_menu(self, widget=None):
-        print('will add new menu item')
+        store_iter = self.get_selected_store_iter()
+        if store_iter is not None:
+            self.omenu.add_menu( self.get_iter_object(store_iter), self.menu_treestore, store_iter )
 
     def on_add_item(self, widget=None):
-        print('will add new item')
+        store_iter = self.get_selected_store_iter()
+        if store_iter is not None:
+            self.omenu.add_item( self.get_iter_object(store_iter), self.menu_treestore, store_iter )
 
     def on_add_execute(self, widget=None):
         print('will add new execute to item')
 
-    def on_add_separator(self, widget=None):
-        print('will add new separator')
-        separator_node = self.omenu.insert_separator_below( self.selected_model[self.selected_index][4] )
-        if separator_node is not None:
-            selection = self.treeview.get_selection()
-            _, paths = selection.get_selected_rows()
-            for path in paths:
-                iter = self.menu_treestore.get_iter(path)
-                self.menu_treestore.insert_after( None, iter, [separator_node.get('label'), self.omenu.strip_ns(separator_node.tag), "", "", separator_node ] )
 
+    def on_add_separator(self, widget=None):
+        store_iter = self.get_selected_store_iter()
+        if store_iter is not None:
+            self.omenu.add_separator( self.get_iter_object(store_iter), self.menu_treestore, store_iter )
 
     def on_add_pipemenu(self, widget=None):
-        print('will add new pipemenu')
+        store_iter = self.get_selected_store_iter()
+        if store_iter is not None:
+            self.omenu.add_pipemenu( self.get_iter_object(store_iter), self.menu_treestore, store_iter )
 
     def on_add_link(self, widget=None):
         print('will add new link')
+        store_iter = self.get_selected_store_iter()
+        if store_iter is not None:
+            self.omenu.add_link( self.get_iter_object(store_iter), self.menu_treestore, store_iter )
 
     def on_label_changed( self, widget ):
         if self.selected_index is not None:
