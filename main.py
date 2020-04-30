@@ -82,6 +82,10 @@ MENU_XML = """
                 <attribute name="label">_Link to Menu</attribute>
                 <attribute name="action">app.add_item_link</attribute>
             </item>
+            <item>
+                <attribute name="label">_Directory View</attribute>
+                <attribute name="action">app.add_dir_view</attribute>
+            </item>
         </section>
     </submenu>
     <submenu>
@@ -168,7 +172,7 @@ class Obxml2:
             if item[0].tag == "{http://openbox.org/}action":
                 self.parse_action( menu_treestore, parent_iter, item.get('label'), self.strip_ns(item.tag), item[0] )
         elif ( len(list(item)) == 0 ):
-            piter = menu_treestore.append( parent_iter, [item.get('label'), self.strip_ns(item.tag), "Execute", "", item ] )
+            piter = menu_treestore.append( parent_iter, [item.get('label'), self.strip_ns(item.tag), "", "", item ] )
         else:
             piter = menu_treestore.append( parent_iter, [item.get('label'), self.strip_ns(item.tag), "Multiple Execute", "", item ] )
             for action in item:
@@ -199,17 +203,10 @@ class Obxml2:
         if link.tag == "{http://openbox.org/}menu":
             if link.get('label') is None:
                 link_orig_label = "???"
-                all_menu_elements = self.root.findall('{http://openbox.org/}menu')
-                for menu in all_menu_elements:
+
+                for menu in self.xml.iter('{http://openbox.org/}menu'):
                     if ( menu.get('id') == link.get('id') and menu.get('label') is not None ):
                         link_orig_label = menu.get('label')
-
-                if link_orig_label == "???":
-                    all_menu_elements = self.root.findall('{http://openbox.org/}*/menu')
-                    for menu in all_menu_elements:
-                        if ( menu.get('id') == link.get('id') and menu.get('label') is not None ):
-                            link_orig_label = menu.get('label')
-
                 return link_orig_label
             else:
                 return link.get('label')
@@ -228,9 +225,6 @@ class Obxml2:
                 if item.get('label') != label:
                     item.set('label', label)
                     self.dirty = True
-            else:
-                item.set('label', label)
-                self.dirty = True
 
     def set_execute( self, item, execute_text ):
         if item.tag == "{http://openbox.org/}action":
@@ -280,7 +274,7 @@ class Obxml2:
            self.dirty = True
         else:
            parent = self.get_parent( item )
-           if item.tag == "{http://openbox.org/}action":
+           if item.tag == "{http://openbox.org/}action" and node_tag != item.tag:
                item = parent
                parent = self.get_parent( item )
            if parent is not None:
@@ -291,10 +285,12 @@ class Obxml2:
         return inserted_item
 
     def init_item( self, item ):
-        self.set_label( item, "New Item" )
+        item.set('label', "New Item" )
         init_action = ET.Element( "{http://openbox.org/}action" )
         init_action.set('name', "Execute")
-        init_action.append( ET.Element( "{http://openbox.org/}execute" ) )
+        init_exe = ET.Element( "{http://openbox.org/}execute" )
+        init_exe.text = "command"
+        init_action.append( init_exe )
         item.append( init_action )       
 
     def insert_item_below( self, item ):
@@ -313,7 +309,7 @@ class Obxml2:
         inserted_item = self.insert_node_below( item, "{http://openbox.org/}menu" )
         if inserted_item is not None:
             self.set_id( inserted_item, "pipe-" + str(random.randrange(33333,9999999)) )
-            self.set_label( inserted_item, "New Pipemenu" )
+            inserted_item.set('label', "New Pipemenu" )
             inserted_item.set('execute', "command" )
         return inserted_item
 
@@ -321,7 +317,7 @@ class Obxml2:
         inserted_item = self.insert_node_below( item, "{http://openbox.org/}menu", True )
         if inserted_item is not None:
             self.set_id( inserted_item, "menu-" + str(random.randrange(33333,9999999)) )
-            self.set_label( inserted_item, "New Menu" )
+            inserted_item.set('label', "New Menu" )
             init_item = ET.Element("{http://openbox.org/}item")
             self.init_item( init_item )
             inserted_item.append( init_item )
@@ -340,13 +336,39 @@ class Obxml2:
     def add_item( self, item, menu_treestore, menu_treestore_iter ):
         item_node = self.insert_item_below( item )
         if item_node is not None:
-            menu_treestore.insert_after( None, menu_treestore_iter, [self.get_label(item_node), self.strip_ns(item_node.tag), item_node[0].get('name'), "", item_node[0] ] )
+            menu_treestore.insert_after( None, menu_treestore_iter, [self.get_label(item_node), self.strip_ns(item_node.tag), item_node[0].get('name'), item_node[0][0].text.rstrip().lstrip(), item_node[0] ] )
             self.dirty = True
+
+    def add_action( self, item, menu_treestore, menu_treestore_iter ):
+        if item.tag == "{http://openbox.org/}item":
+            init_action = ET.Element( "{http://openbox.org/}action" )
+            init_action.set('name', "Execute")
+            init_exe = ET.Element( "{http://openbox.org/}execute" )
+            init_exe.text = "command"
+            init_action.append( init_exe )
+            if ( len(list(item)) == 1 ):
+                item.append( init_action )
+                menu_treestore.set_row( menu_treestore_iter, [item.get('label'), self.strip_ns(item.tag), "Multiple Execute", "", item ] )
+                for action in item:
+                    self.parse_action( menu_treestore, menu_treestore_iter, "", "", action )
+            elif ( len(list(item)) == 0 ):
+                item.append( init_action )
+                menu_treestore.set_row( menu_treestore_iter, [item.get('label'), self.strip_ns(item.tag), "Execute", item[0][0].text.rstrip().lstrip(), item[0] ] )
+            else:
+                item.append( init_action )
+                self.parse_action( menu_treestore, menu_treestore_iter, "", "", list(item)[len(list(item))-1] )
+        elif item.tag == "{http://openbox.org/}action":
+            parent = self.get_parent( item )
+            if parent is not None:
+                if len(list(parent)) > 1:
+                    menu_treestore_iter = menu_treestore.iter_parent( menu_treestore_iter )
+                self.add_action( parent, menu_treestore, menu_treestore_iter )
+
 
     def add_link( self, item, menu_treestore, menu_treestore_iter ):
         link_node = self.insert_link_below( item )
         if link_node is not None:
-            menu_treestore.insert_after( None, menu_treestore_iter, [self.get_label(link_node), self.strip_ns(link_node.tag), "", "", link_node ] )
+            menu_treestore.insert_after( None, menu_treestore_iter, [self.get_label(link_node), self.strip_ns(link_node.tag), "Link", "", link_node ] )
             self.dirty = True
 
     def add_pipemenu( self, item, menu_treestore, menu_treestore_iter ):
@@ -384,6 +406,10 @@ class Obxml2:
             if current_index < len(list(parent))-1:
                 parent.remove( item )
                 parent.insert( current_index+1, item )
+
+
+
+
 
 class Obmenu2Window(Gtk.ApplicationWindow):
     def __init__(self, *args, **kwargs):
@@ -494,6 +520,18 @@ class Obmenu2Window(Gtk.ApplicationWindow):
     def get_iter_object(self, store_iter):
         return self.menu_treestore.get_value(store_iter, 4)
 
+    def get_iter_label(self, store_iter):
+        return self.menu_treestore.get_value(store_iter, 0)
+
+    def get_iter_type(self, store_iter):
+        return self.menu_treestore.get_value(store_iter, 1)
+
+    def get_iter_action(self, store_iter):
+        return self.menu_treestore.get_value(store_iter, 2)
+
+    def get_iter_exe(self, store_iter):
+        return self.menu_treestore.get_value(store_iter, 3)
+
     def on_search_execute_clicked(self, widget):
         """ serach clicked """
         dialog = Gtk.FileChooserDialog(
@@ -530,13 +568,10 @@ class Obmenu2Window(Gtk.ApplicationWindow):
         dialog.add_filter(filter_xml)
 
 
-    def on_cursor_changed( self, selection ):
-        # ...
-        [model, selected] = selection.get_selected()
-        self.selected_model = model
-        self.selected_index = selected
-        if selected is not None:
-            if model[selected][1] == "separator":
+    def update_input_fields( self ):
+        store_iter = self.get_selected_store_iter()
+        if store_iter is not None:
+            if self.get_iter_type(store_iter) == "separator":
                 self.entry_edit_label.set_text("")
                 self.entry_edit_label.set_sensitive(False)
                 self.entry_edit_id.set_text("")
@@ -546,16 +581,15 @@ class Obmenu2Window(Gtk.ApplicationWindow):
                 self.search_edit_execute.set_sensitive(False)
                 self.combo_edit_action.set_active_id(None)
                 self.combo_edit_action.set_sensitive(False)
-            elif model[selected][1] == "item": 
-                print("you selected " + model[selected][0])
-                self.entry_edit_label.set_text(model[selected][0])
+            elif self.get_iter_type(store_iter) == "item": 
+                self.entry_edit_label.set_text(self.get_iter_label(store_iter))
                 self.entry_edit_label.set_sensitive(True)
                 self.entry_edit_id.set_text("")
                 self.entry_edit_id.set_sensitive(False)
-                if model[selected][2] == "Execute":
+                if self.get_iter_action(store_iter) == "Execute":
                     self.combo_edit_action.set_active(0) # todo support detect of current model
                     self.combo_edit_action.set_sensitive(True)
-                    self.entry_edit_execute.set_text(model[selected][3])
+                    self.entry_edit_execute.set_text(self.get_iter_exe(store_iter))
                     self.entry_edit_execute.set_sensitive(True)
                     self.search_edit_execute.set_sensitive(True)
                 else:
@@ -564,40 +598,47 @@ class Obmenu2Window(Gtk.ApplicationWindow):
                     self.entry_edit_execute.set_text("")
                     self.entry_edit_execute.set_sensitive(False)
                     self.search_edit_execute.set_sensitive(False)
-            elif model[selected][1] == "menu":
-                self.entry_edit_label.set_text(model[selected][0])
-                self.entry_edit_label.set_sensitive(True)
-                self.entry_edit_id.set_text(self.omenu.get_id_string(model[selected][4]))
+            elif self.get_iter_type(store_iter) == "menu":
+                self.entry_edit_label.set_text(self.get_iter_label(store_iter))
+                if self.get_iter_action(store_iter) == "Link":
+                    self.entry_edit_label.set_sensitive(False)
+                else:
+                    self.entry_edit_label.set_sensitive(True)
+                self.entry_edit_id.set_text(self.omenu.get_id_string(self.get_iter_object(store_iter)))
                 self.entry_edit_id.set_sensitive(True)
                 self.entry_edit_execute.set_text("")
                 self.entry_edit_execute.set_sensitive(False)
                 self.combo_edit_action.set_active_id(None)
                 self.combo_edit_action.set_sensitive(False)
                 self.search_edit_execute.set_sensitive(False)
-            elif model[selected][1] == "pipemenu":
-                self.entry_edit_label.set_text(model[selected][0])
+            elif self.get_iter_type(store_iter) == "pipemenu":
+                self.entry_edit_label.set_text(self.get_iter_label(store_iter))
                 self.entry_edit_label.set_sensitive(True)
-                self.entry_edit_id.set_text(self.omenu.get_id_string(model[selected][4]))
+                self.entry_edit_id.set_text(self.omenu.get_id_string(self.get_iter_object(store_iter)))
                 self.entry_edit_id.set_sensitive(True)
-                self.entry_edit_execute.set_text(model[selected][3])
+                self.entry_edit_execute.set_text(self.get_iter_exe(store_iter))
                 self.entry_edit_execute.set_sensitive(True)
                 self.combo_edit_action.set_active(0)
                 self.combo_edit_action.set_sensitive(False)
                 self.search_edit_execute.set_sensitive(False)
-            elif model[selected][1] == "" and model[selected][2] == "Execute":
+            elif self.get_iter_type(store_iter) == "" and self.get_iter_action(store_iter) == "Execute":
                 self.entry_edit_label.set_text("")
                 self.entry_edit_label.set_sensitive(False)
                 self.entry_edit_id.set_text("")
                 self.entry_edit_id.set_sensitive(False)
                 self.combo_edit_action.set_active(0) # todo support detect of current model
                 self.combo_edit_action.set_sensitive(True)
-                self.entry_edit_execute.set_text(model[selected][3])
+                self.entry_edit_execute.set_text(self.get_iter_exe(store_iter))
                 self.entry_edit_execute.set_sensitive(True)
                 self.search_edit_execute.set_sensitive(True)
             else:
                 print("dunno")
         else:
             print("nothing")
+
+
+    def on_cursor_changed( self, selection ):
+        self.update_input_fields()
 
     def request_discard(self):
         dialog = Gtk.MessageDialog(
@@ -721,49 +762,61 @@ class Obmenu2Window(Gtk.ApplicationWindow):
         store_iter = self.get_selected_store_iter()
         if store_iter is not None:
             self.omenu.add_menu( self.get_iter_object(store_iter), self.menu_treestore, store_iter )
+        self.update_input_fields()
 
     def on_add_item(self, widget=None):
         store_iter = self.get_selected_store_iter()
         if store_iter is not None:
             self.omenu.add_item( self.get_iter_object(store_iter), self.menu_treestore, store_iter )
+        self.update_input_fields()
 
     def on_add_execute(self, widget=None):
-        print('will add new execute to item')
-
+        store_iter = self.get_selected_store_iter()
+        if store_iter is not None:
+            self.omenu.add_action( self.get_iter_object(store_iter), self.menu_treestore, store_iter )
+        self.update_input_fields()
 
     def on_add_separator(self, widget=None):
         store_iter = self.get_selected_store_iter()
         if store_iter is not None:
             self.omenu.add_separator( self.get_iter_object(store_iter), self.menu_treestore, store_iter )
+        self.update_input_fields()
 
     def on_add_pipemenu(self, widget=None):
         store_iter = self.get_selected_store_iter()
         if store_iter is not None:
             self.omenu.add_pipemenu( self.get_iter_object(store_iter), self.menu_treestore, store_iter )
+        self.update_input_fields()
 
     def on_add_link(self, widget=None):
-        print('will add new link')
         store_iter = self.get_selected_store_iter()
         if store_iter is not None:
             self.omenu.add_link( self.get_iter_object(store_iter), self.menu_treestore, store_iter )
+        self.update_input_fields()
+
+    def on_add_dir_view(self, widget=None):
+        print('will add pipe menu with dir listening')
 
     def on_label_changed( self, widget ):
-        if self.selected_index is not None:
-            self.selected_model[self.selected_index][0] = widget.get_text()
-            self.omenu.set_label( self.selected_model[self.selected_index][4], widget.get_text() )
+        store_iter = self.get_selected_store_iter()
+        if store_iter is not None:
+            self.menu_treestore.set_row( store_iter, [ widget.get_text(), self.get_iter_type(store_iter), self.get_iter_action(store_iter), self.get_iter_exe(store_iter), self.get_iter_object(store_iter)  ] )
+            self.omenu.set_label( self.get_iter_object(store_iter), widget.get_text() )
 
     def on_execution_changed( self, widget ):
-        if self.selected_index is not None:
-            self.selected_model[self.selected_index][3] = widget.get_text()
-            self.omenu.set_execute( self.selected_model[self.selected_index][4], widget.get_text() )
+        store_iter = self.get_selected_store_iter()
+        if store_iter is not None:
+            self.menu_treestore.set_row( store_iter, [ self.get_iter_label(store_iter), self.get_iter_type(store_iter), self.get_iter_action(store_iter), widget.get_text(), self.get_iter_object(store_iter)  ] )
+            self.omenu.set_execute( self.get_iter_object(store_iter), widget.get_text() )
 
     def on_id_changed( self, widget ):
-        if self.selected_index is not None:
-            self.omenu.set_id( self.selected_model[self.selected_index][4], widget.get_text() )
-            label_update = self.omenu.get_label( self.selected_model[self.selected_index][4] )
+        store_iter = self.get_selected_store_iter()
+        if store_iter is not None:
+            self.omenu.set_id( self.get_iter_object(store_iter), widget.get_text() )
+            label_update = self.omenu.get_label( self.get_iter_object(store_iter) )
             if label_update is not None:
-                self.selected_model[self.selected_index][0] = label_update
-
+                self.menu_treestore.set_row( store_iter, [ label_update, self.get_iter_type(store_iter), self.get_iter_action(store_iter), self.get_iter_exe(store_iter), self.get_iter_object(store_iter)  ] )
+        self.update_input_fields()
 
 
 class Application(Gtk.Application):
@@ -806,7 +859,9 @@ class Application(Gtk.Application):
         self.add_simple_action('add_item_separator', self.on_action_addseparator_activated )
         self.add_simple_action('add_item_pipemenu', self.on_action_addpipemenu_activated )
         self.add_simple_action('add_item_link', self.on_action_addlink_activated )
-        
+       # self.add_simple_action('add_dir_view', self.on_action_adddir_activated )
+       
+
         builder.connect_signals(self)        
 
     def on_action_newmenu_activated(self, action, user_data):
@@ -835,6 +890,8 @@ class Application(Gtk.Application):
         self.window.on_add_pipemenu()
     def on_action_addlink_activated(self, action, user_data):
         self.window.on_add_link()
+    def on_action_adddir_activated(self, action, user_data):
+        self.window.on_add_dir_view()
 
     def add_simple_action(self, name, callback):
         action = Gio.SimpleAction.new(name, None)
