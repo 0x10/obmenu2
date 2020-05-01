@@ -7,6 +7,7 @@ gi.require_version("Gtk", "3.0")
 from gi.repository import GLib, Gio, Gtk, GObject
 
 import xml.etree.ElementTree as ET
+from xml.dom import minidom
 
 # This would typically be its own file
 MENU_XML = """
@@ -56,6 +57,23 @@ MENU_XML = """
         </section>
     </submenu>
     <submenu>
+        <attribute name="label">_Import</attribute>
+        <section>
+            <item>
+                <attribute name="label">_Directory View</attribute>
+                <attribute name="action">app.add_dir_view</attribute>
+            </item>
+            <item>
+                <attribute name="label">_File List</attribute>
+                <attribute name="action">app.add_file_view</attribute>
+            </item>
+            <item>
+                <attribute name="label">_Bookmarks</attribute>
+                <attribute name="action">app.add_bm_view</attribute>
+            </item>
+        </section>
+    </submenu>
+    <submenu>
         <attribute name="label">_Add</attribute>
         <section>
             <item>
@@ -83,8 +101,8 @@ MENU_XML = """
                 <attribute name="action">app.add_item_link</attribute>
             </item>
             <item>
-                <attribute name="label">_Directory View</attribute>
-                <attribute name="action">app.add_dir_view</attribute>
+                <attribute name="label">_Directory Pipe Menu</attribute>
+                <attribute name="action">app.add_directory_pipe</attribute>
             </item>
         </section>
     </submenu>
@@ -101,6 +119,75 @@ MENU_XML = """
 </interface>
 """
 
+EMPTY_OPENBOX_MENU= """<?xml version='1.0' encoding='utf-8'?>
+<openbox_menu xmlns="http://openbox.org/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://openbox.org/                 file:///usr/share/openbox/menu.xsd">
+<menu id="root-menu" label="Openbox Menu">
+<item label="New Item">
+<action name="Execute">
+<execute>command</execute>
+</action>
+</item>
+</menu>
+</openbox_menu>"""
+
+# Helper function for ET
+# backported from python 3.9
+# Contributed by Stefan Behnel
+def indent(tree, space="  ", level=0):
+    """Indent an XML document by inserting newlines and indentation space
+    after elements.
+    *tree* is the ElementTree or Element to modify.  The (root) element
+    itself will not be changed, but the tail text of all elements in its
+    subtree will be adapted.
+    *space* is the whitespace to insert for each indentation level, two
+    space characters by default.
+    *level* is the initial indentation level. Setting this to a higher
+    value than 0 can be used for indenting subtrees that are more deeply
+    nested inside of a document.
+    """
+    if isinstance(tree, ET.ElementTree):
+        tree = tree.getroot()
+    if level < 0:
+        raise ValueError(f"Initial indentation level must be >= 0, got {level}")
+    if not len(tree):
+        return
+
+    # Reduce the memory consumption by reusing indentation strings.
+    indentations = ["\n" + level * space]
+
+    def _indent_children(elem, level):
+        # Start a new indentation level for the first child.
+        child_level = level + 1
+        try:
+            child_indentation = indentations[child_level]
+        except IndexError:
+            child_indentation = indentations[level] + space
+            indentations.append(child_indentation)
+
+        if not elem.text or not elem.text.strip():
+            elem.text = child_indentation
+
+        for child in elem:
+            if len(child):
+                _indent_children(child, child_level)
+            if not child.tail or not child.tail.strip():
+                child.tail = child_indentation
+
+        # Dedent after the last child by overwriting the previous indentation.
+        if not child.tail.strip():
+            child.tail = indentations[level]
+
+    _indent_children(tree, 0) 
+
+
+
+# TODO:
+#    - python3 styleguide applied
+#    - openbox handling like reconfigure and loading of original menu.xml from dotfile
+#    - try to fix the label <-> edit spacing
+#    - on app exit: ask before close if dirty
+#    - basic refactoring and optimization
+
 class Obxml2:
     def __init__( self, filename):
         ET.register_namespace('', "http://openbox.org/")
@@ -111,11 +198,25 @@ class Obxml2:
         _, _, stag = tag.rpartition('}')
         return stag
 
+    def add_ns( self, tag ):
+        return "{http://openbox.org/}" + tag
+
+
     def open( self, filename ):
-        self.xml = ET.parse(filename)
-        self.fname = filename
-        self.root = self.xml.getroot()       
-        self.dirty = False       
+        try:
+            self.xml = ET.parse(filename)
+        except ET.ParseError:
+            self.xml = None
+
+        if self.xml is not None:
+            self.root = self.xml.getroot()       
+            if self.strip_ns(self.root.tag) != "openbox_menu":
+                self.clear()
+            else:
+                self.fname = filename
+                self.dirty = False       
+        else:
+            self.clear()
 
     def save( self ):
         if self.fname is None or self.fname == "":
@@ -125,18 +226,14 @@ class Obxml2:
             return True
 
     def write( self, filename ):
+        indent(self.xml)
         self.xml.write(filename, "utf-8", True, '' )
         self.fname = filename
         self.dirty = False
 
     def clear( self ):
         self.fname = ""
-        self.xml = ET.ElementTree(ET.fromstring(
-"""<?xml version='1.0' encoding='utf-8'?>
-<openbox_menu xmlns="http://openbox.org/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://openbox.org/                 file:///usr/share/openbox/menu.xsd">
-<menu id="root-menu" label="Openbox Menu">
-</menu>
-</openbox_menu>"""))
+        self.xml = ET.ElementTree(ET.fromstring(EMPTY_OPENBOX_MENU))
         self.root = self.xml.getroot()       
         self.dirty = False
 
@@ -148,7 +245,7 @@ class Obxml2:
 
     def parse_submenu(self, menu_treestore, parent_iter, submenu):
         for child in submenu:
-            if child.tag == "{http://openbox.org/}menu":
+            if self.strip_ns(child.tag) == "menu":
                 if child.get('label') is None:
                     self.parse_link( menu_treestore, parent_iter, child )
                 elif child.get('execute') is not None:
@@ -156,7 +253,7 @@ class Obxml2:
                 else:
                     piter = menu_treestore.append( parent_iter, [child.get('label'), self.strip_ns(child.tag), "", "", child ] )
                     self.parse_submenu( menu_treestore, piter, child )
-            elif child.tag == "{http://openbox.org/}item":
+            elif self.strip_ns(child.tag) == "item":
                 self.parse_item( menu_treestore, parent_iter, child )
             else:
                 menu_treestore.append( parent_iter, [child.get('label'), self.strip_ns(child.tag), "", "", child ] )
@@ -169,7 +266,7 @@ class Obxml2:
 
     def parse_item( self, menu_treestore,parent_iter, item ):
         if ( len(list(item)) == 1 ):
-            if item[0].tag == "{http://openbox.org/}action":
+            if self.strip_ns(item[0].tag) == "action":
                 self.parse_action( menu_treestore, parent_iter, item.get('label'), self.strip_ns(item.tag), item[0] )
         elif ( len(list(item)) == 0 ):
             piter = menu_treestore.append( parent_iter, [item.get('label'), self.strip_ns(item.tag), "", "", item ] )
@@ -181,30 +278,29 @@ class Obxml2:
     def parse_action( self,menu_treestore, parent_iter, item_label, item_type, action ):
         execute_text = ""
         if len(list(action)) == 1:
-            if action[0].tag == "{http://openbox.org/}execute" and action[0].text is not None:
+            if self.strip_ns(action[0].tag) == "execute" and action[0].text is not None:
                 execute_text = action[0].text.rstrip().lstrip()
             #elif parse the rest of the possible types
         menu_treestore.append( parent_iter, [item_label, item_type, action.get('name'), execute_text, action ] )
 
     def get_id_string( self, item ):
-        if item.tag == "{http://openbox.org/}menu":
+        if self.strip_ns(item.tag) == "menu":
             return item.get('id')
         else:
             return ""
     
     def set_id( self, item, id_string ):
-        if item.tag == "{http://openbox.org/}menu":
+        if self.strip_ns(item.tag) == "menu":
             if item.get('id') != id_string:
                 item.set('id', id_string )
                 self.dirty = True
-                print("set_id")
 
     def get_label( self, link ):
-        if link.tag == "{http://openbox.org/}menu":
+        if self.strip_ns(link.tag) == "menu":
             if link.get('label') is None:
                 link_orig_label = "???"
 
-                for menu in self.xml.iter('{http://openbox.org/}menu'):
+                for menu in self.xml.iter(self.add_ns("menu")):
                     if ( menu.get('id') == link.get('id') and menu.get('label') is not None ):
                         link_orig_label = menu.get('label')
                 return link_orig_label
@@ -214,29 +310,63 @@ class Obxml2:
             return link.get('label')
 
     def set_label( self, item, label ):
-        if item.tag == "{http://openbox.org/}item":
+        if self.strip_ns(item.tag) == "item":
             if item.get('label') != label:
                 item.set('label', label)
                 self.dirty = True
-        elif item.tag == "{http://openbox.org/}action":
-            self.set_label( self.get_parent( item ), label )
-        elif item.tag == "{http://openbox.org/}menu":
+        elif self.strip_ns(item.tag) == "action":
+            if label != "":
+                self.set_label( self.get_parent( item ), label )
+        elif self.strip_ns(item.tag) == "menu":
             if item.get('label') is not None:
                 if item.get('label') != label:
                     item.set('label', label)
                     self.dirty = True
 
     def set_execute( self, item, execute_text ):
-        if item.tag == "{http://openbox.org/}action":
+        if self.strip_ns(item.tag) == "action":
             if len(list(item)) == 1:
                 if item[0].text != execute_text:
                     item[0].text = execute_text
                     self.dirty = True
-        elif item.tag == "{http://openbox.org/}menu":
+        elif self.strip_ns(item.tag) == "menu":
             if item.get('execute') is not None:
                 if item.text != execute_text:
                     item.set('execute', execute_text )
                     self.dirty = True
+
+    def get_execute( self, item ):
+        if self.strip_ns(item.tag) == "action":
+            if (len(list(item)) == 1):
+                return item[0].text
+        elif self.strip_ns(item.tag) == "menu":
+            if item.get('execute') is not None:
+                return item.get('execute')
+        return None
+
+    def set_action( self, item, action_text ):
+        if self.strip_ns(item.tag) == "action":
+            old_action = item.get('name')
+            item.set( 'name', action_text )
+            if (action_text != "Execute") and (old_action == "Execute"):
+                if (len(list(item)) == 1):
+                    item.remove(item[0])
+            if (action_text == "Execute") and (old_action != "Execute"):
+                init_exe = ET.Element( self.add_ns("execute"))
+                init_exe.text = "command"
+                item.append( init_exe )
+        elif self.strip_ns(item.tag) == "item":
+            if len(list(item)) == 1:
+                self.set_action( item[0], action_text )
+
+    def get_action( self, item ):
+        if self.strip_ns(item.tag) == "action":
+            return item.get('name')
+        elif self.strip_ns(item.tag) == "item":
+            if len(list(item)) == 1:
+                return item[0].get('name')
+        return None
+            
 
     def find_in_children( self, submenu, node ):
         for child in submenu:
@@ -254,9 +384,8 @@ class Obxml2:
 
 
     def delete_node( self, item ):
-        print("shall remove: " + item.tag )
         p = self.get_parent( item )
-        if item.tag == "{http://openbox.org/}action" and len(list(p)) == 1:
+        if self.strip_ns(item.tag) == "action" and len(list(p)) == 1:
             parent = self.get_parent( p )
             item = p
         else:
@@ -264,49 +393,56 @@ class Obxml2:
 
         if parent is not None:
            parent.remove( item )
+           self.dirty = True
 
     def insert_node_below( self, item, node_tag, allow_root=False ):
         inserted_item = None
-        parent = self.get_parent( item )
-        if ( item.tag == "{http://openbox.org/}menu" and (len(list(item)) == 0 or parent == self.root )) and ( item.get('label') is not None ) and ( item.get('execute') is None ) and ( allow_root is False ):
-           item.append( ET.Element( node_tag ) )
-           inserted_item = list(item)[len(list(item))-1]
-           self.dirty = True
+        if item is None:
+            if allow_root:
+                self.root.append( ET.Element( node_tag ) )
+                inserted_item = list(self.root)[len(list(self.root))-1]
+                self.dirty = True
         else:
-           parent = self.get_parent( item )
-           if item.tag == "{http://openbox.org/}action" and node_tag != item.tag:
-               item = parent
+            parent = self.get_parent( item )
+            if ( self.strip_ns(node_tag) == "menu" and (len(list(item)) == 0 or parent == self.root )) and ( item.get('label') is not None ) and ( item.get('execute') is None ) and ( allow_root is False ):
+                item.append( ET.Element( node_tag ) )
+                inserted_item = list(item)[len(list(item))-1]
+                self.dirty = True
+            else:
                parent = self.get_parent( item )
-           if parent is not None:
-               current_index = list(parent).index(item)
-               parent.insert( current_index + 1, ET.Element( node_tag ) )
-               inserted_item = list(parent)[current_index + 1]
-               self.dirty = True
+               if self.strip_ns(item.tag) == "action" and node_tag != item.tag:
+                   item = parent
+                   parent = self.get_parent( item )
+               if (parent is not None) and (parent != self.root or allow_root == True) :
+                   current_index = list(parent).index(item)
+                   parent.insert( current_index + 1, ET.Element( node_tag ) )
+                   inserted_item = list(parent)[current_index + 1]
+                   self.dirty = True
         return inserted_item
 
     def init_item( self, item ):
         item.set('label', "New Item" )
-        init_action = ET.Element( "{http://openbox.org/}action" )
+        init_action = ET.Element( self.add_ns("action") )
         init_action.set('name', "Execute")
-        init_exe = ET.Element( "{http://openbox.org/}execute" )
+        init_exe = ET.Element( self.add_ns("execute") )
         init_exe.text = "command"
         init_action.append( init_exe )
         item.append( init_action )       
 
     def insert_item_below( self, item ):
-        inserted_item = self.insert_node_below( item, "{http://openbox.org/}item" )
+        inserted_item = self.insert_node_below( item, self.add_ns("item") )
         if inserted_item is not None:
             self.init_item( inserted_item )
         return inserted_item
 
     def insert_link_below( self, item ):
-        inserted_item = self.insert_node_below( item, "{http://openbox.org/}menu" )
+        inserted_item = self.insert_node_below( item, self.add_ns("menu") )
         if inserted_item is not None:
             self.set_id( inserted_item, "None" )
         return inserted_item
 
     def insert_pipe_below( self, item ):
-        inserted_item = self.insert_node_below( item, "{http://openbox.org/}menu" )
+        inserted_item = self.insert_node_below( item, self.add_ns("menu") )
         if inserted_item is not None:
             self.set_id( inserted_item, "pipe-" + str(random.randrange(33333,9999999)) )
             inserted_item.set('label', "New Pipemenu" )
@@ -314,36 +450,34 @@ class Obxml2:
         return inserted_item
 
     def insert_menu_below( self, item ):
-        inserted_item = self.insert_node_below( item, "{http://openbox.org/}menu", True )
+        inserted_item = self.insert_node_below( item, self.add_ns("menu"), True )
         if inserted_item is not None:
             self.set_id( inserted_item, "menu-" + str(random.randrange(33333,9999999)) )
             inserted_item.set('label', "New Menu" )
-            init_item = ET.Element("{http://openbox.org/}item")
+            init_item = ET.Element( self.add_ns("item") )
             self.init_item( init_item )
             inserted_item.append( init_item )
         return inserted_item
 
     def insert_separator_below( self, item ):
-        inserted_item = self.insert_node_below( item, "{http://openbox.org/}separator" )
+        inserted_item = self.insert_node_below( item, self.add_ns("separator") )
         return inserted_item
 
     def add_separator( self, item, menu_treestore, menu_treestore_iter ):
         separator_node = self.insert_separator_below( item )
         if separator_node is not None:
             menu_treestore.insert_after( None, menu_treestore_iter, [self.get_label(separator_node), self.strip_ns(separator_node.tag), "", "", separator_node ] )
-            self.dirty = True
 
     def add_item( self, item, menu_treestore, menu_treestore_iter ):
         item_node = self.insert_item_below( item )
         if item_node is not None:
             menu_treestore.insert_after( None, menu_treestore_iter, [self.get_label(item_node), self.strip_ns(item_node.tag), item_node[0].get('name'), item_node[0][0].text.rstrip().lstrip(), item_node[0] ] )
-            self.dirty = True
 
     def add_action( self, item, menu_treestore, menu_treestore_iter ):
-        if item.tag == "{http://openbox.org/}item":
-            init_action = ET.Element( "{http://openbox.org/}action" )
+        if self.strip_ns(item.tag) == "item":
+            init_action = ET.Element( self.add_ns("action") )
             init_action.set('name', "Execute")
-            init_exe = ET.Element( "{http://openbox.org/}execute" )
+            init_exe = ET.Element( self.add_ns("execute") )
             init_exe.text = "command"
             init_action.append( init_exe )
             if ( len(list(item)) == 1 ):
@@ -357,7 +491,7 @@ class Obxml2:
             else:
                 item.append( init_action )
                 self.parse_action( menu_treestore, menu_treestore_iter, "", "", list(item)[len(list(item))-1] )
-        elif item.tag == "{http://openbox.org/}action":
+        elif self.strip_ns(item.tag) == "action":
             parent = self.get_parent( item )
             if parent is not None:
                 if len(list(parent)) > 1:
@@ -369,24 +503,21 @@ class Obxml2:
         link_node = self.insert_link_below( item )
         if link_node is not None:
             menu_treestore.insert_after( None, menu_treestore_iter, [self.get_label(link_node), self.strip_ns(link_node.tag), "Link", "", link_node ] )
-            self.dirty = True
 
     def add_pipemenu( self, item, menu_treestore, menu_treestore_iter ):
         node = self.insert_pipe_below( item )
         if node is not None:
             menu_treestore.insert_after( None, menu_treestore_iter, [self.get_label(node), 'pipemenu', "Execute", node.get('execute'), node ] )
-            self.dirty = True
 
     def add_menu( self, item, menu_treestore, menu_treestore_iter ):
         node = self.insert_menu_below( item )
         if node is not None:
             piter = menu_treestore.insert_after( None, menu_treestore_iter, [self.get_label(node), self.strip_ns(node.tag), "", "", node ] )
             self.parse_item( menu_treestore, piter, node[0] )
-            self.dirty = True
 
     def move_up( self, item ):
         parent = self.get_parent( item )
-        if item.tag == "{http://openbox.org/}action":
+        if self.strip_ns(item.tag) == "action":
             item = parent
             parent = self.get_parent( item )
         if parent is not None:
@@ -395,10 +526,11 @@ class Obxml2:
                 previous_item = list(parent)[current_index-1]
                 parent.remove( previous_item )
                 parent.insert( current_index, previous_item )
+                self.dirty = True
 
     def move_down( self, item ):
         parent = self.get_parent( item )
-        if item.tag == "{http://openbox.org/}action":
+        if self.strip_ns(item.tag) == "action":
             item = parent
             parent = self.get_parent( item )
         if parent is not None:
@@ -406,6 +538,7 @@ class Obxml2:
             if current_index < len(list(parent))-1:
                 parent.remove( item )
                 parent.insert( current_index+1, item )
+                self.dirty = True
 
 
 
@@ -415,14 +548,18 @@ class Obmenu2Window(Gtk.ApplicationWindow):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.set_border_width(1)
+        self.set_default_size(640, 640)
 
         # Setting up the self.grid in which the elements are to be positionned
         self.grid = Gtk.Grid()
-        self.grid.set_column_homogeneous(True)
-        self.grid.set_row_homogeneous(True)
+
         self.add(self.grid)
 
-        self.omenu = Obxml2( 'menu.xml' )
+        self.omenu = Obxml2(None)
+        self.omenu.open( 'menu.xml' )
+
+        self.set_title( "obmenu2: " + self.omenu.fname )
+        
         # Creating the ListStore model
         self.menu_treestore = Gtk.TreeStore(str, str, str, str, GObject.TYPE_PYOBJECT )
         self.omenu.parse( self.menu_treestore )
@@ -431,42 +568,117 @@ class Obmenu2Window(Gtk.ApplicationWindow):
 
         # creating the treeview, making it use the filter as a model, and adding the columns
         self.treeview = Gtk.TreeView.new_with_model(self.menu_treestore.filter_new())
+        self.treeview.set_headers_visible(True)
         for i, column_title in enumerate(
             ["Label", "Type", "Action", "Execute"]
         ):
             renderer = Gtk.CellRendererText()
             column = Gtk.TreeViewColumn(column_title, renderer, text=i)
+            column.set_sizing(Gtk.TreeViewColumnSizing.AUTOSIZE)
             self.treeview.append_column(column)
 
         self.treeview.get_selection().connect("changed", self.on_cursor_changed )
 
         # creating menu buttons and connect it with the actions
-        self.menu_buttons = list()
+        self.menu_toolbar = Gtk.Toolbar()
+        self.menu_toolbar.set_halign(Gtk.Align.START)
+        self.menu_toolbar.set_hexpand(False)
+        item_idx = 0
 
-        for menu_action in [ ["Save", self.on_save_menu], 
-                             ["Add Menu", self.on_add_menu], 
-                             ["Add Item", self.on_add_item], 
-                             ["Add Seperator", self.on_add_separator], 
-                             ["Up", self.on_move_item_up], 
-                             ["Down", self.on_move_item_down], 
-                             ["Delete", self.on_delete_item] ]:
-            button = Gtk.Button(label=menu_action[0])
-            self.menu_buttons.append(button)
-            button.connect("clicked", menu_action[1]) 
+        button = Gtk.ToolButton.new( Gtk.Image.new_from_icon_name( "document-save", 24 ), "Save")
+        button.connect("clicked", self.on_save_menu )
+        button.set_expand(False)
+        button.set_homogeneous(False)
+        self.menu_toolbar.insert( button, item_idx )
+        item_idx = item_idx + 1
+
+        separator = Gtk.SeparatorToolItem()
+        separator.set_expand(False)
+        separator.set_draw(True)
+        self.menu_toolbar.insert( separator, item_idx )
+        item_idx = item_idx + 1
+
+        button = Gtk.ToolButton.new( None, "Add Menu")
+        button.connect("clicked", self.on_add_menu )
+        button.set_expand(False)
+        button.set_homogeneous(False)
+        self.menu_toolbar.insert( button, item_idx )
+        item_idx = item_idx + 1
+
+        button = Gtk.ToolButton.new( None, "Add Item")
+        button.connect("clicked", self.on_add_item )
+        button.set_expand(False)
+        button.set_homogeneous(False)
+        self.menu_toolbar.insert( button, item_idx )
+        item_idx = item_idx + 1
+
+        button = Gtk.ToolButton.new( None, "Add Separator")
+        button.connect("clicked", self.on_add_separator )
+        button.set_expand(False)
+        button.set_homogeneous(False)
+        self.menu_toolbar.insert( button, item_idx )
+        item_idx = item_idx + 1
+
+        separator = Gtk.SeparatorToolItem()
+        separator.set_expand(False)
+        separator.set_draw(True)
+        self.menu_toolbar.insert( separator, item_idx )
+        item_idx = item_idx + 1
+
+        button = Gtk.ToolButton.new( Gtk.Image.new_from_icon_name( "go-up", 24 ), "Up")
+        button.connect("clicked", self.on_move_item_up )
+        button.set_expand(False)
+        button.set_homogeneous(False)
+        self.menu_toolbar.insert( button, item_idx )
+        item_idx = item_idx + 1
+
+        button = Gtk.ToolButton.new( Gtk.Image.new_from_icon_name( "go-down", 24 ), "Down")
+        button.connect("clicked", self.on_move_item_down )
+        button.set_expand(False)
+        button.set_homogeneous(False)
+        self.menu_toolbar.insert( button, item_idx )
+        item_idx = item_idx + 1
+
+        separator = Gtk.SeparatorToolItem()
+        separator.set_expand(False)
+        separator.set_draw(True)
+        self.menu_toolbar.insert( separator, item_idx )
+        item_idx = item_idx + 1
+
+
+        button = Gtk.ToolButton.new( Gtk.Image.new_from_icon_name( "edit-delete", 24 ), "Delete")
+        button.connect("clicked", self.on_delete_item )
+        button.set_expand(False)
+        button.set_homogeneous(False)
+        self.menu_toolbar.insert( button, item_idx )
+        item_idx = item_idx + 1
 
 
         # creating the entry info fields
-        self.label_edit_label = Gtk.Label(label="Label")
+        self.label_edit_label = Gtk.Label(label="Label", xalign=0)
+        self.label_edit_label.set_hexpand(False)
+        self.label_edit_label.set_halign(Gtk.Align.START)
+        self.label_edit_label.set_margin_start(0)
+        self.label_edit_label.set_margin_end(0)
+
         self.entry_edit_label = Gtk.Entry()
+        self.entry_edit_label.set_hexpand(True)
+        self.entry_edit_label.set_halign(Gtk.Align.FILL)
+        self.entry_edit_label.set_margin_start(0)
         self.entry_edit_label.connect("changed", self.on_label_changed )
         self.entry_edit_label.set_sensitive(False)
 
-        self.label_edit_id = Gtk.Label(label="id")
+        self.label_edit_id = Gtk.Label(label="id", xalign=0)
+        self.label_edit_id.set_hexpand(False)
+        self.label_edit_id.set_halign(Gtk.Align.START)
+        self.label_edit_id.set_margin_end(0)
         self.entry_edit_id = Gtk.Entry()
         self.entry_edit_id.set_sensitive(False)
         self.entry_edit_id.connect("changed", self.on_id_changed )
         
-        self.label_edit_action = Gtk.Label(label="Action")
+        self.label_edit_action = Gtk.Label(label="Action", xalign=0)
+        self.label_edit_action.set_hexpand(False)
+        self.label_edit_action.set_halign(Gtk.Align.START)
         action_options = Gtk.ListStore(str)
         action_options.append(["Execute"])
         action_options.append(["Reconfigure"])
@@ -475,36 +687,46 @@ class Obmenu2Window(Gtk.ApplicationWindow):
         self.combo_edit_action = Gtk.ComboBox.new_with_model_and_entry(action_options)
         self.combo_edit_action.set_entry_text_column(0)
         self.combo_edit_action.set_sensitive(False)
+        self.combo_edit_action.connect("changed", self.on_action_changed)
         
-        self.label_edit_execute = Gtk.Label(label="Execute")
+        self.label_edit_execute = Gtk.Label(label="Execute", xalign=0)
+        self.label_edit_execute.set_hexpand(False)
+        self.label_edit_execute.set_halign(Gtk.Align.START)
         self.entry_edit_execute = Gtk.Entry()
         self.entry_edit_execute.set_sensitive(False)
         self.entry_edit_execute.connect("changed", self.on_execution_changed )
         self.search_edit_execute = Gtk.Button(label="...")
         self.search_edit_execute.connect("clicked", self.on_search_execute_clicked )
         self.search_edit_execute.set_sensitive(False)
+        self.search_edit_execute.set_hexpand(False)
+        self.search_edit_execute.set_halign(Gtk.Align.END)
+
 
         # setting up the layout, putting the treeview in a scrollwindow, and the buttons in a row
         self.scrollable_treelist = Gtk.ScrolledWindow()
+        self.scrollable_treelist.set_policy(Gtk.PolicyType.ALWAYS, Gtk.PolicyType.ALWAYS)
         self.scrollable_treelist.set_vexpand(True)
+        self.scrollable_treelist.add(self.treeview)
 
-        self.grid.attach(self.scrollable_treelist, 0, 0, 8, 10)
-        self.grid.attach_next_to( self.menu_buttons[0],self.scrollable_treelist, Gtk.PositionType.TOP, 1, 1 )
+        self.grid.set_column_homogeneous(False)
+        self.grid.set_column_spacing( 0 )
+        self.grid.set_row_homogeneous(False)
+
+        self.grid.attach(self.scrollable_treelist, 0, 0, 3, 1)
+        self.grid.attach_next_to( self.menu_toolbar,self.scrollable_treelist, Gtk.PositionType.TOP, 3, 1 )
+
         self.grid.attach_next_to( self.label_edit_label, self.scrollable_treelist, Gtk.PositionType.BOTTOM, 1, 1 )
-        self.grid.attach_next_to( self.entry_edit_label, self.label_edit_label, Gtk.PositionType.RIGHT, 1, 1 )
+        self.grid.attach_next_to( self.entry_edit_label, self.label_edit_label, Gtk.PositionType.RIGHT, 2, 1 )
+
         self.grid.attach_next_to( self.label_edit_id, self.label_edit_label, Gtk.PositionType.BOTTOM, 1, 1 )
-        self.grid.attach_next_to( self.entry_edit_id, self.label_edit_id, Gtk.PositionType.RIGHT, 1, 1 )
+        self.grid.attach_next_to( self.entry_edit_id, self.label_edit_id, Gtk.PositionType.RIGHT, 2, 1 )
+
         self.grid.attach_next_to( self.label_edit_action, self.label_edit_id, Gtk.PositionType.BOTTOM, 1, 1 )
-        self.grid.attach_next_to( self.combo_edit_action, self.label_edit_action, Gtk.PositionType.RIGHT, 1, 1 )
+        self.grid.attach_next_to( self.combo_edit_action, self.label_edit_action, Gtk.PositionType.RIGHT, 2, 1 )
+
         self.grid.attach_next_to( self.label_edit_execute, self.label_edit_action, Gtk.PositionType.BOTTOM, 1, 1 )
         self.grid.attach_next_to( self.entry_edit_execute, self.label_edit_execute, Gtk.PositionType.RIGHT, 1, 1 )
         self.grid.attach_next_to( self.search_edit_execute, self.entry_edit_execute, Gtk.PositionType.RIGHT, 1, 1 )
-
-        for i, button in enumerate(self.menu_buttons[1:]):
-            self.grid.attach_next_to(
-                button, self.menu_buttons[i], Gtk.PositionType.RIGHT, 1, 1
-            )
-        self.scrollable_treelist.add(self.treeview)
 
         self.show_all()
 
@@ -547,11 +769,7 @@ class Obmenu2Window(Gtk.ApplicationWindow):
 
         response = dialog.run()
         if response == Gtk.ResponseType.OK:
-            print("Open clicked")
-            print("File selected: " + dialog.get_filename())
             self.entry_edit_execute.set_text( dialog.get_filename() )
-        elif response == Gtk.ResponseType.CANCEL:
-            print("Cancel clicked")
 
         dialog.destroy()
 
@@ -567,6 +785,18 @@ class Obmenu2Window(Gtk.ApplicationWindow):
         filter_xml.add_mime_type("text/xml")
         dialog.add_filter(filter_xml)
 
+    def set_combo_value(self, combo_text):
+        #this function should be obsolete if set_active_id() would work!
+        if combo_text == "Execute":
+            self.combo_edit_action.set_active(0)
+        elif combo_text == "Reconfigure":
+            self.combo_edit_action.set_active(1)
+        elif combo_text == "Restart":
+            self.combo_edit_action.set_active(2)
+        elif combo_text == "Exit":
+            self.combo_edit_action.set_active(3)
+        else:
+            self.combo_edit_action.set_active(0)
 
     def update_input_fields( self ):
         store_iter = self.get_selected_store_iter()
@@ -586,15 +816,13 @@ class Obmenu2Window(Gtk.ApplicationWindow):
                 self.entry_edit_label.set_sensitive(True)
                 self.entry_edit_id.set_text("")
                 self.entry_edit_id.set_sensitive(False)
+                self.set_combo_value(self.get_iter_action(store_iter))
+                self.combo_edit_action.set_sensitive(True)
                 if self.get_iter_action(store_iter) == "Execute":
-                    self.combo_edit_action.set_active(0) # todo support detect of current model
-                    self.combo_edit_action.set_sensitive(True)
                     self.entry_edit_execute.set_text(self.get_iter_exe(store_iter))
                     self.entry_edit_execute.set_sensitive(True)
                     self.search_edit_execute.set_sensitive(True)
                 else:
-                    self.combo_edit_action.set_active_id(None)
-                    self.combo_edit_action.set_sensitive(False)
                     self.entry_edit_execute.set_text("")
                     self.entry_edit_execute.set_sensitive(False)
                     self.search_edit_execute.set_sensitive(False)
@@ -621,16 +849,21 @@ class Obmenu2Window(Gtk.ApplicationWindow):
                 self.combo_edit_action.set_active(0)
                 self.combo_edit_action.set_sensitive(False)
                 self.search_edit_execute.set_sensitive(False)
-            elif self.get_iter_type(store_iter) == "" and self.get_iter_action(store_iter) == "Execute":
+            elif self.get_iter_type(store_iter) == "":
                 self.entry_edit_label.set_text("")
                 self.entry_edit_label.set_sensitive(False)
                 self.entry_edit_id.set_text("")
                 self.entry_edit_id.set_sensitive(False)
-                self.combo_edit_action.set_active(0) # todo support detect of current model
+                self.set_combo_value(self.get_iter_action(store_iter))
                 self.combo_edit_action.set_sensitive(True)
-                self.entry_edit_execute.set_text(self.get_iter_exe(store_iter))
-                self.entry_edit_execute.set_sensitive(True)
-                self.search_edit_execute.set_sensitive(True)
+                if self.get_iter_action(store_iter) == "Execute":
+                    self.entry_edit_execute.set_text(self.get_iter_exe(store_iter))
+                    self.entry_edit_execute.set_sensitive(True)
+                    self.search_edit_execute.set_sensitive(True)
+                else:
+                    self.entry_edit_execute.set_text("")
+                    self.entry_edit_execute.set_sensitive(False)
+                    self.search_edit_execute.set_sensitive(False)
             else:
                 print("dunno")
         else:
@@ -693,14 +926,11 @@ class Obmenu2Window(Gtk.ApplicationWindow):
 
         response = dialog.run()
         if response == Gtk.ResponseType.OK:
-            print("Open clicked")
-            print("File selected: " + dialog.get_filename())
             #load selected
             self.omenu.open( dialog.get_filename() )
             self.menu_treestore.clear()
             self.omenu.parse( self.menu_treestore )
-        elif response == Gtk.ResponseType.CANCEL:
-            print("Cancel clicked")
+            self.set_title( "obmenu2: " + self.omenu.fname )
 
         dialog.destroy()
 
@@ -727,12 +957,8 @@ class Obmenu2Window(Gtk.ApplicationWindow):
 
         response = dialog.run()
         if response == Gtk.ResponseType.OK:
-            print("Save clicked")
-            print("File selected: " + dialog.get_filename())
             #save current
             self.omenu.write( dialog.get_filename()  )
-        elif response == Gtk.ResponseType.CANCEL:
-            print("Cancel clicked")
 
         dialog.destroy()
 
@@ -762,6 +988,8 @@ class Obmenu2Window(Gtk.ApplicationWindow):
         store_iter = self.get_selected_store_iter()
         if store_iter is not None:
             self.omenu.add_menu( self.get_iter_object(store_iter), self.menu_treestore, store_iter )
+        else:
+            self.omenu.add_menu( None, self.menu_treestore, None )
         self.update_input_fields()
 
     def on_add_item(self, widget=None):
@@ -800,14 +1028,30 @@ class Obmenu2Window(Gtk.ApplicationWindow):
     def on_label_changed( self, widget ):
         store_iter = self.get_selected_store_iter()
         if store_iter is not None:
-            self.menu_treestore.set_row( store_iter, [ widget.get_text(), self.get_iter_type(store_iter), self.get_iter_action(store_iter), self.get_iter_exe(store_iter), self.get_iter_object(store_iter)  ] )
+            print("label_changed == " + widget.get_text() )
             self.omenu.set_label( self.get_iter_object(store_iter), widget.get_text() )
+            self.menu_treestore.set_row( store_iter, [ widget.get_text(), self.get_iter_type(store_iter), self.get_iter_action(store_iter), self.get_iter_exe(store_iter), self.get_iter_object(store_iter)  ] )
 
     def on_execution_changed( self, widget ):
         store_iter = self.get_selected_store_iter()
         if store_iter is not None:
-            self.menu_treestore.set_row( store_iter, [ self.get_iter_label(store_iter), self.get_iter_type(store_iter), self.get_iter_action(store_iter), widget.get_text(), self.get_iter_object(store_iter)  ] )
             self.omenu.set_execute( self.get_iter_object(store_iter), widget.get_text() )
+            self.menu_treestore.set_row( store_iter, [ self.get_iter_label(store_iter), self.get_iter_type(store_iter), self.get_iter_action(store_iter), widget.get_text(), self.get_iter_object(store_iter)  ] )
+
+    def on_action_changed(self, widget):
+        store_iter = self.get_selected_store_iter()
+        combo_iter = widget.get_active_iter()
+        if (store_iter is not None) and (combo_iter is not None):
+            model = widget.get_model()
+            action_name = model[combo_iter][0]
+            if action_name != self.get_iter_action(store_iter):
+                self.omenu.set_action( self.get_iter_object(store_iter), action_name )
+                if self.omenu.get_action( self.get_iter_object(store_iter) ) is not None:
+                    execution_text = ""
+                    if self.omenu.get_execute(self.get_iter_object(store_iter)) is not None:
+                        execution_text = self.omenu.get_execute(self.get_iter_object(store_iter))
+                    self.menu_treestore.set_row( store_iter, [ self.get_iter_label(store_iter), self.get_iter_type(store_iter), action_name, execution_text, self.get_iter_object(store_iter)  ] )
+        self.update_input_fields()
 
     def on_id_changed( self, widget ):
         store_iter = self.get_selected_store_iter()
