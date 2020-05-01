@@ -7,8 +7,8 @@ gi.require_version("Gtk", "3.0")
 from gi.repository import GLib, Gio, Gtk, GObject
 import sys
 import random
-
-
+import subprocess
+from pathlib import Path
 
 # This would typically be its own file
 MENU_XML = """
@@ -33,6 +33,10 @@ MENU_XML = """
             <item>
                 <attribute name="label">_Save As</attribute>
                 <attribute name="action">app.saveas_menu</attribute>
+            </item>
+            <item>
+                <attribute name="label">_Reconfigure Openbox</attribute>
+                <attribute name="action">app.reconfigure</attribute>
             </item>
             <item>
                 <attribute name="label">_Quit</attribute>
@@ -184,15 +188,15 @@ def indent(tree, space="  ", level=0):
     _indent_children(tree, 0)
 
 
+def reconfigure_openbox():
+    subprocess.run(["openbox", "--reconfigure"])
+
 # TODO:
-#    - openbox handling like reconfigure and loading of original menu.xml from dotfile
 #    - try to fix the label <-> edit spacing
-#    - on app exit: ask before close if dirty
-#    - about dialog
 #    - basic refactoring and optimization
 
 class Obxml2:
-    def __init__(self, filename):
+    def __init__(self, filename=None):
         ET.register_namespace('', "http://openbox.org/")
         if filename is not None:
             self.open(filename)
@@ -234,7 +238,7 @@ class Obxml2:
         self.dirty = False
 
     def clear(self):
-        self.fname = ""
+        self.fname = "untitled.menu.xml"
         self.xml = ET.ElementTree(ET.fromstring(EMPTY_OPENBOX_MENU))
         self.root = self.xml.getroot()
         self.dirty = False
@@ -378,6 +382,7 @@ class Obxml2:
         if self.strip_ns(item.tag) == "action":
             old_action = item.get('name')
             item.set('name', action_text)
+            self.dirty = True
             if (action_text != "Execute") and (old_action == "Execute"):
                 if (len(list(item)) == 1):
                     item.remove(item[0])
@@ -388,6 +393,7 @@ class Obxml2:
         elif self.strip_ns(item.tag) == "item":
             if len(list(item)) == 1:
                 self.set_action(item[0], action_text)
+                self.dirty = True
 
     def get_action(self, item):
         if self.strip_ns(item.tag) == "action":
@@ -601,20 +607,31 @@ class Obxml2:
 
 
 class Obmenu2Window(Gtk.ApplicationWindow):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, passed_filename, *args, **kwargs ):
         super().__init__(*args, **kwargs)
         self.set_border_width(1)
         self.set_default_size(640, 640)
 
-        # Setting up the self.grid in which the elements are to be positionned
-        self.grid = Gtk.Grid()
+        self.omenu = Obxml2()
 
-        self.add(self.grid)
+        home = str(Path.home())
+        self.dotfile_menu_xml = home+'/.config/openbox/menu.xml'
+        init_file = self.dotfile_menu_xml
 
-        self.omenu = Obxml2(None)
-        self.omenu.open('menu.xml')
+        if passed_filename is not None and Path(passed_filename).is_file():
+            init_file = passed_filename
+
+        if Path(init_file).is_file():
+            self.omenu.open(init_file)
+        else:
+            self.omenu.clear()           
+
 
         self.set_title("obmenu2: " + self.omenu.fname)
+
+        # Setting up the self.grid in which the elements are to be positionned
+        self.grid = Gtk.Grid()
+        self.add(self.grid)
 
         # Creating the ListStore model
         self.menu_treestore = Gtk.TreeStore(
@@ -848,6 +865,31 @@ class Obmenu2Window(Gtk.ApplicationWindow):
 
         self.show_all()
 
+    # Override the default handler for the delete-event signal
+    def do_delete_event(self, event):
+        if self.omenu.is_dirty() == True:
+            # Show our message dialog
+            d = Gtk.MessageDialog(transient_for=self,
+                                  modal=True,
+                                  buttons=Gtk.ButtonsType.YES_NO)
+            d.props.text = 'Are you sure you want to quit?'
+            d.format_secondary_text(
+                "Do you want to discard the changes?"
+            )
+            response = d.run()
+            d.destroy()
+
+            # We only terminate when the user presses the OK button
+            if response == Gtk.ResponseType.YES:
+                print('Terminating...')
+                return False
+
+            # Otherwise we keep the application open
+            return True
+        else:
+            return False
+
+
     def get_selected_store_iter(self):
         selection = self.treeview.get_selection()
         _, paths = selection.get_selected_rows()
@@ -1059,6 +1101,9 @@ class Obmenu2Window(Gtk.ApplicationWindow):
     def on_save_menu(self, widget=None):
         if self.omenu.save() == False:
             self.on_save_as_menu()
+        else:
+            if self.omenu.fname == self.dotfile_menu_xml:
+                reconfigure_openbox()
 
     def on_save_as_menu(self, widget=None):
         dialog = Gtk.FileChooserDialog(
@@ -1080,6 +1125,8 @@ class Obmenu2Window(Gtk.ApplicationWindow):
         if response == Gtk.ResponseType.OK:
             # save current
             self.omenu.write(dialog.get_filename())
+            if self.omenu.fname == self.dotfile_menu_xml:
+                reconfigure_openbox()
 
         dialog.destroy()
 
@@ -1239,19 +1286,20 @@ class Application(Gtk.Application):
         super().__init__(
             *args,
             application_id="org.openbox.obmenu2",
-            flags=Gio.ApplicationFlags.NON_UNIQUE,
+            flags=Gio.ApplicationFlags.NON_UNIQUE | Gio.ApplicationFlags.HANDLES_COMMAND_LINE,
             **kwargs
         )
         self.window = None
 
         self.add_main_option(
-            "test",
-            ord("t"),
+            "file",
+            ord("f"),
             GLib.OptionFlags.NONE,
-            GLib.OptionArg.NONE,
-            "Command line test",
+            GLib.OptionArg.STRING,
+            "Open given file",
             None,
         )
+        self.passed_filename = None
 
     def do_startup(self):
         Gtk.Application.do_startup(self)
@@ -1259,85 +1307,70 @@ class Application(Gtk.Application):
         builder = Gtk.Builder.new_from_string(MENU_XML, -1)
         self.set_menubar(builder.get_object("menubar"))
 
-        self.add_simple_action('quit', self.on_quit)
-        self.add_simple_action('about', self.on_about)
-        self.add_simple_action('new_menu', self.on_action_newmenu_activated)
-        self.add_simple_action('open_menu', self.on_action_openmenu_activated)
-        self.add_simple_action('save_menu', self.on_action_savemenu_activated)
-        self.add_simple_action(
-            'saveas_menu',
-            self.on_action_saveasmenu_activated)
-        self.add_simple_action(
-            'move_item_up',
-            self.on_action_moveitemup_activated)
-        self.add_simple_action(
-            'move_item_down',
-            self.on_action_moveitemdown_activated)
-        self.add_simple_action(
-            'delete_item',
-            self.on_action_deleteitem_activated)
-        self.add_simple_action(
-            'add_item_menu',
-            self.on_action_addmenu_activated)
-        self.add_simple_action(
-            'add_item_item',
-            self.on_action_additem_activated)
-        self.add_simple_action(
-            'add_item_execute',
-            self.on_action_addexecute_activated)
-        self.add_simple_action(
-            'add_item_separator',
-            self.on_action_addseparator_activated)
-        self.add_simple_action(
-            'add_item_pipemenu',
-            self.on_action_addpipemenu_activated)
-        self.add_simple_action(
-            'add_item_link',
-            self.on_action_addlink_activated)
-       # self.add_simple_action('add_dir_view', self.on_action_adddir_activated )
+        signals = [['quit', self.on_quit],
+                   ['about', self.on_about],
+                   ['new_menu', self.on_action_newmenu],
+                   ['open_menu', self.on_action_openmenu],
+                   ['save_menu', self.on_action_savemenu],
+                   ['saveas_menu', self.on_action_saveasmenu],
+                   ['reconfigure', self.on_action_reconfigure],
+                   ['move_item_up', self.on_action_moveitemup],
+                   ['move_item_down', self.on_action_moveitemdown],
+                   ['delete_item', self.on_action_deleteitem],
+                   ['add_item_menu', self.on_action_addmenu],
+                   ['add_item_item', self.on_action_additem],
+                   ['add_item_execute', self.on_action_addexecute],
+                   ['add_item_separator', self.on_action_addseparator],
+                   ['add_item_pipemenu', self.on_action_addpipemenu],
+                   ['add_item_link', self.on_action_addlink]]
+        for signal in signals:
+            self.add_simple_action( signal[0], signal[1] )
 
         builder.connect_signals(self)
 
-    def on_action_newmenu_activated(self, action, user_data):
+    def on_action_newmenu(self, action, user_data):
         self.window.on_new_menu()
 
-    def on_action_openmenu_activated(self, action, user_data):
+    def on_action_openmenu(self, action, user_data):
         self.window.on_open_menu()
 
-    def on_action_savemenu_activated(self, action, user_data):
+    def on_action_savemenu(self, action, user_data):
         self.window.on_save_menu()
 
-    def on_action_saveasmenu_activated(self, action, user_data):
+    def on_action_saveasmenu(self, action, user_data):
         self.window.on_save_as_menu()
 
-    def on_action_moveitemup_activated(self, action, user_data):
+    def on_action_reconfigure(self, action, user_data):
+        reconfigure_openbox()
+
+    def on_action_moveitemup(self, action, user_data):
         self.window.on_move_item_up()
 
-    def on_action_moveitemdown_activated(self, action, user_data):
+    def on_action_moveitemdown(self, action, user_data):
         self.window.on_move_item_down()
 
-    def on_action_deleteitem_activated(self, action, user_data):
+    def on_action_deleteitem(self, action, user_data):
         self.window.on_delete_item()
 
-    def on_action_addmenu_activated(self, action, user_data):
+    def on_action_addmenu(self, action, user_data):
         self.window.on_add_menu()
 
-    def on_action_additem_activated(self, action, user_data):
+    def on_action_additem(self, action, user_data):
         self.window.on_add_item()
 
-    def on_action_addexecute_activated(self, action, user_data):
+    def on_action_addexecute(self, action, user_data):
         self.window.on_add_execute()
 
-    def on_action_addseparator_activated(self, action, user_data):
+    def on_action_addseparator(self, action, user_data):
         self.window.on_add_separator()
 
-    def on_action_addpipemenu_activated(self, action, user_data):
+    def on_action_addpipemenu(self, action, user_data):
         self.window.on_add_pipemenu()
 
-    def on_action_addlink_activated(self, action, user_data):
+    def on_action_addlink(self, action, user_data):
         self.window.on_add_link()
 
-    def on_action_adddir_activated(self, action, user_data):
+    def on_action_adddir(self, action, user_data):
         self.window.on_add_dir_view()
 
     def add_simple_action(self, name, callback):
@@ -1350,7 +1383,10 @@ class Application(Gtk.Application):
         if not self.window:
             # Windows are associated with the application
             # when the last one is closed the application shuts down
-            self.window = Obmenu2Window(application=self, title="obmenu2")
+            self.window = Obmenu2Window(
+                passed_filename = self.passed_filename, 
+                application=self, 
+                title="obmenu2")
 
         self.window.present()
 
@@ -1359,19 +1395,29 @@ class Application(Gtk.Application):
         # convert GVariantDict -> GVariant -> dict
         options = options.end().unpack()
 
-        if "test" in options:
+        self.passed_filename = None
+        if "file" in options:
             # This is printed on the main instance
-            print("Test argument recieved: %s" % options["test"])
+            if Path(options["file"]).is_file():
+                self.passed_filename = options["file"]
 
         self.activate()
         return 0
 
     def on_about(self, action, param):
-        about_dialog = Gtk.AboutDialog(transient_for=self.window, modal=True)
-        about_dialog.present()
+        about_dialog = Gtk.AboutDialog(parent=self.window, transient_for=self.window, modal=True)
+        about_dialog.set_program_name("obmenu2")
+        about_dialog.set_version("0.9")
+        about_dialog.set_copyright("Christian Kranz")
+        about_dialog.set_authors(["Christian Kranz"])
+        about_dialog.set_website("https://github.com/0x10/obmenu2")
+        about_dialog.set_license_type(Gtk.License.MIT_X11)
+        about_dialog.run()
+        about_dialog.destroy()
 
     def on_quit(self, action, param):
-        self.quit()
+        if self.window.do_delete_event(None) != True:
+            self.quit()
 
 
 if __name__ == "__main__":
