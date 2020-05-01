@@ -9,3 +9,8 @@ It was written from scratch and does not share any code with the old obmenu tool
 * Python 3 (tested with python 3.7)
 * GTK3 (gobject-introspection)
 
+# Features
+* Interactively edit the menu.xml and add new menus and menu-items
+* add multiple execution actions to a menu item
+* add multiple menus and link them
+* add pipe menus and much more.
