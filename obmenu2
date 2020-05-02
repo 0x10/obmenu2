@@ -206,9 +206,17 @@ class Obxml2:
         return stag
 
     def add_ns(self, tag):
-        return "{http://openbox.org/}" + tag
+        if self.import_empty_ns == True:
+            return tag
+        else:
+            return "{http://openbox.org/}" + tag
+
+    def check_default_ns(self, elem):
+        if "{http://openbox.org/}" not in elem.tag:
+            self.import_empty_ns = True
 
     def open(self, filename):
+        self.import_empty_ns = False
         try:
             self.xml = ET.parse(filename)
         except ET.ParseError:
@@ -216,6 +224,8 @@ class Obxml2:
 
         if self.xml is not None:
             self.root = self.xml.getroot()
+            self.check_default_ns(self.root)
+
             if self.strip_ns(self.root.tag) != "openbox_menu":
                 self.clear()
             else:
