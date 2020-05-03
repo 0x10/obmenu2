@@ -191,9 +191,6 @@ def indent(tree, space="  ", level=0):
 def reconfigure_openbox():
     subprocess.run(["openbox", "--reconfigure"])
 
-# TODO:
-#    - try to fix the label <-> edit spacing
-#    - basic refactoring and optimization
 
 class Obxml2:
     def __init__(self, filename=None, change_observer=None):
@@ -451,6 +448,7 @@ class Obxml2:
             parent.remove(item)
             self.set_dirty()
 
+
     def insert_node_below(self, item, node_tag, allow_root=False):
         inserted_item = None
         if item is None:
@@ -523,6 +521,31 @@ class Obxml2:
     def insert_separator_below(self, item):
         inserted_item = self.insert_node_below(item, self.add_ns("separator"))
         return inserted_item
+
+    def move_up(self, item):
+        parent = self.get_parent(item)
+        if self.strip_ns(item.tag) == "action":
+            item = parent
+            parent = self.get_parent(item)
+        if parent is not None:
+            current_index = list(parent).index(item)
+            if current_index > 0:
+                previous_item = list(parent)[current_index - 1]
+                parent.remove(previous_item)
+                parent.insert(current_index, previous_item)
+                self.set_dirty()
+
+    def move_down(self, item):
+        parent = self.get_parent(item)
+        if self.strip_ns(item.tag) == "action":
+            item = parent
+            parent = self.get_parent(item)
+        if parent is not None:
+            current_index = list(parent).index(item)
+            if current_index < len(list(parent)) - 1:
+                parent.remove(item)
+                parent.insert(current_index + 1, item)
+                self.set_dirty()
 
     def add_separator(self, item, menu_treestore, menu_treestore_iter):
         separator_node = self.insert_separator_below(item)
@@ -602,30 +625,21 @@ class Obxml2:
                         node.tag), "", "", node])
             self.parse_item(menu_treestore, piter, node[0])
 
-    def move_up(self, item):
-        parent = self.get_parent(item)
-        if self.strip_ns(item.tag) == "action":
-            item = parent
-            parent = self.get_parent(item)
-        if parent is not None:
-            current_index = list(parent).index(item)
-            if current_index > 0:
-                previous_item = list(parent)[current_index - 1]
-                parent.remove(previous_item)
-                parent.insert(current_index, previous_item)
-                self.set_dirty()
+    def remove_item(self, item, menu_treestore, menu_treestore_iter):
+        self.delete_node(item)
+        menu_treestore.remove(menu_treestore_iter)
 
-    def move_down(self, item):
-        parent = self.get_parent(item)
-        if self.strip_ns(item.tag) == "action":
-            item = parent
-            parent = self.get_parent(item)
-        if parent is not None:
-            current_index = list(parent).index(item)
-            if current_index < len(list(parent)) - 1:
-                parent.remove(item)
-                parent.insert(current_index + 1, item)
-                self.set_dirty()
+    def swap_up(self, item, menu_treestore, menu_treestore_iter):
+        previous_iter = menu_treestore.iter_previous(menu_treestore_iter)
+        if previous_iter is not None:
+            self.move_up(item)
+            menu_treestore.move_before(menu_treestore_iter, previous_iter)
+
+    def swap_down(self, item, menu_treestore, menu_treestore_iter):
+        next_iter = menu_treestore.iter_next(menu_treestore_iter)
+        if next_iter is not None:
+            self.move_down(item)
+            menu_treestore.move_after(menu_treestore_iter, next_iter)
 
 
 class Obmenu2Window(Gtk.ApplicationWindow):
@@ -649,7 +663,6 @@ class Obmenu2Window(Gtk.ApplicationWindow):
             self.omenu.open(init_file)
         else:
             self.omenu.clear()
-
 
         self.set_title("obmenu2: " + self.omenu.fname)
 
@@ -684,82 +697,36 @@ class Obmenu2Window(Gtk.ApplicationWindow):
         self.menu_toolbar = Gtk.Toolbar()
         self.menu_toolbar.set_halign(Gtk.Align.START)
         self.menu_toolbar.set_hexpand(False)
-        item_idx = 0
 
-        button = Gtk.ToolButton.new(
-            Gtk.Image.new_from_icon_name(
-                "document-save", 24), "Save")
-        button.connect("clicked", self.on_save_menu)
-        button.set_expand(False)
-        button.set_homogeneous(False)
-        self.menu_toolbar.insert(button, item_idx)
-        item_idx = item_idx + 1
-
-        separator = Gtk.SeparatorToolItem()
-        separator.set_expand(False)
-        separator.set_draw(True)
-        self.menu_toolbar.insert(separator, item_idx)
-        item_idx = item_idx + 1
-
-        button = Gtk.ToolButton.new(None, "Add Menu")
-        button.connect("clicked", self.on_add_menu)
-        button.set_expand(False)
-        button.set_homogeneous(False)
-        self.menu_toolbar.insert(button, item_idx)
-        item_idx = item_idx + 1
-
-        button = Gtk.ToolButton.new(None, "Add Item")
-        button.connect("clicked", self.on_add_item)
-        button.set_expand(False)
-        button.set_homogeneous(False)
-        self.menu_toolbar.insert(button, item_idx)
-        item_idx = item_idx + 1
-
-        button = Gtk.ToolButton.new(None, "Add Separator")
-        button.connect("clicked", self.on_add_separator)
-        button.set_expand(False)
-        button.set_homogeneous(False)
-        self.menu_toolbar.insert(button, item_idx)
-        item_idx = item_idx + 1
-
-        separator = Gtk.SeparatorToolItem()
-        separator.set_expand(False)
-        separator.set_draw(True)
-        self.menu_toolbar.insert(separator, item_idx)
-        item_idx = item_idx + 1
-
-        button = Gtk.ToolButton.new(
-            Gtk.Image.new_from_icon_name(
-                "go-up", 24), "Up")
-        button.connect("clicked", self.on_move_item_up)
-        button.set_expand(False)
-        button.set_homogeneous(False)
-        self.menu_toolbar.insert(button, item_idx)
-        item_idx = item_idx + 1
-
-        button = Gtk.ToolButton.new(
-            Gtk.Image.new_from_icon_name(
-                "go-down", 24), "Down")
-        button.connect("clicked", self.on_move_item_down)
-        button.set_expand(False)
-        button.set_homogeneous(False)
-        self.menu_toolbar.insert(button, item_idx)
-        item_idx = item_idx + 1
-
-        separator = Gtk.SeparatorToolItem()
-        separator.set_expand(False)
-        separator.set_draw(True)
-        self.menu_toolbar.insert(separator, item_idx)
-        item_idx = item_idx + 1
-
-        button = Gtk.ToolButton.new(
-            Gtk.Image.new_from_icon_name(
-                "edit-delete", 24), "Delete")
-        button.connect("clicked", self.on_delete_item)
-        button.set_expand(False)
-        button.set_homogeneous(False)
-        self.menu_toolbar.insert(button, item_idx)
-        item_idx = item_idx + 1
+        for toolbar_item in [ [ "document-save", "Save", self.on_save_menu ],
+                              [ None, None, None ],
+                              [ None, "Add Menu", self.on_add_menu ],
+                              [ None, "Add Item", self.on_add_item ],
+                              [ None, "Add Separator", self.on_add_separator ],
+                              [ None, None, None ],
+                              [ "go-up", "Up", self.on_move_item_up ],
+                              [ "go-down", "Down", self.on_move_item_down ],
+                              [ None, None, None ],
+                              [ "edit-delete", "Delete", self.on_delete_item ] ]:
+            if toolbar_item[2] is not None:
+                if toolbar_item[0] is not None:
+                    icon = Gtk.Image.new_from_icon_name(toolbar_item[0], 24)
+                else:
+                    icon = None
+                button = Gtk.ToolButton.new(icon, toolbar_item[1])
+                button.connect("clicked", toolbar_item[2])
+                button.set_expand(False)
+                button.set_homogeneous(False)
+                self.menu_toolbar.insert(
+                    button, 
+                    len(self.menu_toolbar.get_children()))
+            else:
+                separator = Gtk.SeparatorToolItem()
+                separator.set_expand(False)
+                separator.set_draw(True)
+                self.menu_toolbar.insert(
+                    separator, 
+                    len(self.menu_toolbar.get_children()))
 
         # creating the entry info fields
         self.label_edit_label = Gtk.Label(label="Label", xalign=0)
@@ -975,94 +942,74 @@ class Obmenu2Window(Gtk.ApplicationWindow):
         dialog.add_filter(filter_xml)
 
     def set_combo_value(self, combo_text):
-        # this function should be obsolete if set_active_id() would work!
-        if combo_text == "Execute":
-            self.combo_edit_action.set_active(0)
-        elif combo_text == "Reconfigure":
-            self.combo_edit_action.set_active(1)
-        elif combo_text == "Restart":
-            self.combo_edit_action.set_active(2)
-        elif combo_text == "Exit":
-            self.combo_edit_action.set_active(3)
+        if combo_text is not None:
+            # this function should be obsolete if set_active_id() would work!
+            if combo_text == "Execute":
+                self.combo_edit_action.set_active(0)
+            elif combo_text == "Reconfigure":
+                self.combo_edit_action.set_active(1)
+            elif combo_text == "Restart":
+                self.combo_edit_action.set_active(2)
+            elif combo_text == "Exit":
+                self.combo_edit_action.set_active(3)
+            else:
+                self.combo_edit_action.set_active(0)
+            self.combo_edit_action.set_sensitive(True)
         else:
-            self.combo_edit_action.set_active(0)
+            self.combo_edit_action.set_active_id(None)
+            self.combo_edit_action.set_sensitive(False)
+
+    def disable_entry(self, entry_edit, value=""):
+        entry_edit.set_text(value)
+        entry_edit.set_sensitive(False)
+
+    def enable_entry(self, entry_edit, value):
+        entry_edit.set_text(value)
+        entry_edit.set_sensitive(True)
 
     def update_input_fields(self):
         store_iter = self.get_selected_store_iter()
         if store_iter is not None:
-            if self.get_iter_type(store_iter) == "separator":
-                self.entry_edit_label.set_text("")
-                self.entry_edit_label.set_sensitive(False)
-                self.entry_edit_id.set_text("")
-                self.entry_edit_id.set_sensitive(False)
-                self.entry_edit_execute.set_text("")
-                self.entry_edit_execute.set_sensitive(False)
-                self.search_edit_execute.set_sensitive(False)
-                self.combo_edit_action.set_active_id(None)
-                self.combo_edit_action.set_sensitive(False)
-            elif self.get_iter_type(store_iter) == "item":
-                self.entry_edit_label.set_text(self.get_iter_label(store_iter))
-                self.entry_edit_label.set_sensitive(True)
-                self.entry_edit_id.set_text("")
-                self.entry_edit_id.set_sensitive(False)
+            if self.get_iter_type(store_iter) == "item":
+                self.enable_entry(self.entry_edit_label, self.get_iter_label(store_iter))
+                self.disable_entry(self.entry_edit_id)
                 self.set_combo_value(self.get_iter_action(store_iter))
-                self.combo_edit_action.set_sensitive(True)
                 if self.get_iter_action(store_iter) == "Execute":
-                    self.entry_edit_execute.set_text(
-                        self.get_iter_exe(store_iter))
-                    self.entry_edit_execute.set_sensitive(True)
-                    self.search_edit_execute.set_sensitive(True)
+                    self.enable_entry(self.entry_edit_execute, self.get_iter_exe(store_iter))
                 else:
-                    self.entry_edit_execute.set_text("")
-                    self.entry_edit_execute.set_sensitive(False)
-                    self.search_edit_execute.set_sensitive(False)
+                    self.disable_entry(self.entry_edit_execute)
             elif self.get_iter_type(store_iter) == "menu":
-                self.entry_edit_label.set_text(self.get_iter_label(store_iter))
                 if self.get_iter_action(store_iter) == "Link":
-                    self.entry_edit_label.set_sensitive(False)
+                    self.disable_entry(self.entry_edit_label, self.get_iter_label(store_iter))
                 else:
-                    self.entry_edit_label.set_sensitive(True)
-                self.entry_edit_id.set_text(
-                    self.omenu.get_id_string(
-                        self.get_iter_object(store_iter)))
-                self.entry_edit_id.set_sensitive(True)
-                self.entry_edit_execute.set_text("")
-                self.entry_edit_execute.set_sensitive(False)
-                self.combo_edit_action.set_active_id(None)
-                self.combo_edit_action.set_sensitive(False)
-                self.search_edit_execute.set_sensitive(False)
+                    self.enable_entry(self.entry_edit_label, self.get_iter_label(store_iter))
+                self.enable_entry(self.entry_edit_id, self.omenu.get_id_string(self.get_iter_object(store_iter)))
+                self.disable_entry(self.entry_edit_execute)
+                self.set_combo_value(None)
             elif self.get_iter_type(store_iter) == "pipemenu":
-                self.entry_edit_label.set_text(self.get_iter_label(store_iter))
-                self.entry_edit_label.set_sensitive(True)
-                self.entry_edit_id.set_text(
-                    self.omenu.get_id_string(
-                        self.get_iter_object(store_iter)))
-                self.entry_edit_id.set_sensitive(True)
-                self.entry_edit_execute.set_text(self.get_iter_exe(store_iter))
-                self.entry_edit_execute.set_sensitive(True)
-                self.combo_edit_action.set_active(0)
-                self.combo_edit_action.set_sensitive(False)
-                self.search_edit_execute.set_sensitive(False)
+                self.enable_entry(self.entry_edit_label, self.get_iter_label(store_iter))
+                self.enable_entry(self.entry_edit_id, self.omenu.get_id_string(self.get_iter_object(store_iter)))
+                self.enable_entry(self.entry_edit_execute, self.get_iter_exe(store_iter))
+                self.set_combo_value(None)
             elif self.get_iter_type(store_iter) == "":
-                self.entry_edit_label.set_text("")
-                self.entry_edit_label.set_sensitive(False)
-                self.entry_edit_id.set_text("")
-                self.entry_edit_id.set_sensitive(False)
+                self.disable_entry(self.entry_edit_label)
+                self.disable_entry(self.entry_edit_id)
                 self.set_combo_value(self.get_iter_action(store_iter))
-                self.combo_edit_action.set_sensitive(True)
                 if self.get_iter_action(store_iter) == "Execute":
-                    self.entry_edit_execute.set_text(
-                        self.get_iter_exe(store_iter))
-                    self.entry_edit_execute.set_sensitive(True)
-                    self.search_edit_execute.set_sensitive(True)
+                    self.enable_entry(self.entry_edit_execute, self.get_iter_exe(store_iter))
                 else:
-                    self.entry_edit_execute.set_text("")
-                    self.entry_edit_execute.set_sensitive(False)
-                    self.search_edit_execute.set_sensitive(False)
-            else:
-                print("dunno")
+                    self.disable_entry(self.entry_edit_execute)
+            else: #"separator"
+                self.disable_entry(self.entry_edit_label)
+                self.disable_entry(self.entry_edit_id)
+                self.disable_entry(self.entry_edit_execute)
+                self.set_combo_value(None)
         else:
-            print("nothing")
+            self.disable_entry(self.entry_edit_label)
+            self.disable_entry(self.entry_edit_id)
+            self.disable_entry(self.entry_edit_execute)
+            self.set_combo_value(None)
+        self.search_edit_execute.set_sensitive(self.entry_edit_execute.get_sensitive())
 
     def on_cursor_changed(self, selection):
         self.update_input_fields()
@@ -1164,83 +1111,44 @@ class Obmenu2Window(Gtk.ApplicationWindow):
 
         dialog.destroy()
 
-    def on_move_item_up(self, widget=None):
+    def perform_at_selection(self, operation, allow_root=False):
         store_iter = self.get_selected_store_iter()
         if store_iter is not None:
-            previous_iter = self.menu_treestore.iter_previous(store_iter)
-            if previous_iter is not None:
-                self.omenu.move_up(self.get_iter_object(store_iter))
-                self.menu_treestore.move_before(store_iter, previous_iter)
-
-    def on_move_item_down(self, widget=None):
-        store_iter = self.get_selected_store_iter()
-        if store_iter is not None:
-            next_iter = self.menu_treestore.iter_next(store_iter)
-            if next_iter is not None:
-                self.omenu.move_down(self.get_iter_object(store_iter))
-                self.menu_treestore.move_after(store_iter, next_iter)
-
-    def on_delete_item(self, widget=None):
-        store_iter = self.get_selected_store_iter()
-        if store_iter is not None:
-            self.omenu.delete_node(self.get_iter_object(store_iter))
-            self.menu_treestore.remove(store_iter)
-
-    def on_add_menu(self, widget=None):
-        store_iter = self.get_selected_store_iter()
-        if store_iter is not None:
-            self.omenu.add_menu(
+            operation(
                 self.get_iter_object(store_iter),
                 self.menu_treestore,
                 store_iter)
         else:
-            self.omenu.add_menu(None, self.menu_treestore, None)
+            if allow_root == True:
+                operation(None, self.menu_treestore, None)
         self.update_input_fields()
+
+    def on_move_item_up(self, widget=None):
+        self.perform_at_selection(self.omenu.swap_up)
+
+    def on_move_item_down(self, widget=None):
+        self.perform_at_selection(self.omenu.swap_down)
+
+    def on_delete_item(self, widget=None):
+        self.perform_at_selection(self.omenu.remove_item)
+
+    def on_add_menu(self, widget=None):
+        self.perform_at_selection(self.omenu.add_menu, True)
 
     def on_add_item(self, widget=None):
-        store_iter = self.get_selected_store_iter()
-        if store_iter is not None:
-            self.omenu.add_item(
-                self.get_iter_object(store_iter),
-                self.menu_treestore,
-                store_iter)
-        self.update_input_fields()
+        self.perform_at_selection(self.omenu.add_item)
 
     def on_add_execute(self, widget=None):
-        store_iter = self.get_selected_store_iter()
-        if store_iter is not None:
-            self.omenu.add_action(
-                self.get_iter_object(store_iter),
-                self.menu_treestore,
-                store_iter)
-        self.update_input_fields()
+        self.perform_at_selection(self.omenu.add_action)
 
     def on_add_separator(self, widget=None):
-        store_iter = self.get_selected_store_iter()
-        if store_iter is not None:
-            self.omenu.add_separator(
-                self.get_iter_object(store_iter),
-                self.menu_treestore,
-                store_iter)
-        self.update_input_fields()
+        self.perform_at_selection(self.omenu.add_separator)
 
     def on_add_pipemenu(self, widget=None):
-        store_iter = self.get_selected_store_iter()
-        if store_iter is not None:
-            self.omenu.add_pipemenu(
-                self.get_iter_object(store_iter),
-                self.menu_treestore,
-                store_iter)
-        self.update_input_fields()
+        self.perform_at_selection(self.omenu.add_pipemenu)
 
     def on_add_link(self, widget=None):
-        store_iter = self.get_selected_store_iter()
-        if store_iter is not None:
-            self.omenu.add_link(
-                self.get_iter_object(store_iter),
-                self.menu_treestore,
-                store_iter)
-        self.update_input_fields()
+        self.perform_at_selection(self.omenu.add_link)
 
     def on_add_dir_view(self, widget=None):
         print('will add pipe menu with dir listening')
