@@ -196,10 +196,11 @@ def reconfigure_openbox():
 #    - basic refactoring and optimization
 
 class Obxml2:
-    def __init__(self, filename=None):
+    def __init__(self, filename=None, change_observer=None):
         ET.register_namespace('', "http://openbox.org/")
         if filename is not None:
             self.open(filename)
+        self.dirt_observer = change_observer
 
     def strip_ns(self, tag):
         _, _, stag = tag.rpartition('}')
@@ -230,7 +231,7 @@ class Obxml2:
                 self.clear()
             else:
                 self.fname = filename
-                self.dirty = False
+                self.clear_dirty()
         else:
             self.clear()
 
@@ -245,16 +246,27 @@ class Obxml2:
         indent(self.xml)
         self.xml.write(filename, "utf-8", True, '')
         self.fname = filename
-        self.dirty = False
+        self.clear_dirty()
 
     def clear(self):
         self.fname = "untitled.menu.xml"
         self.xml = ET.ElementTree(ET.fromstring(EMPTY_OPENBOX_MENU))
         self.root = self.xml.getroot()
-        self.dirty = False
+        self.clear_dirty()
 
     def is_dirty(self):
         return self.dirty
+
+    def change_dirty(self, state):
+        self.dirty = state
+        if self.dirt_observer is not None:
+            self.dirt_observer(state)
+
+    def clear_dirty(self):
+        self.change_dirty(False)
+
+    def set_dirty(self):
+        self.change_dirty(True)
 
     def parse(self, menu_treestore):
         self.parse_submenu(menu_treestore, None, self.root)
@@ -336,7 +348,7 @@ class Obxml2:
         if self.strip_ns(item.tag) == "menu":
             if item.get('id') != id_string:
                 item.set('id', id_string)
-                self.dirty = True
+                self.set_dirty()
 
     def get_label(self, link):
         if self.strip_ns(link.tag) == "menu":
@@ -357,7 +369,7 @@ class Obxml2:
         if self.strip_ns(item.tag) == "item":
             if item.get('label') != label:
                 item.set('label', label)
-                self.dirty = True
+                self.set_dirty()
         elif self.strip_ns(item.tag) == "action":
             if label != "":
                 self.set_label(self.get_parent(item), label)
@@ -365,19 +377,19 @@ class Obxml2:
             if item.get('label') is not None:
                 if item.get('label') != label:
                     item.set('label', label)
-                    self.dirty = True
+                    self.set_dirty()
 
     def set_execute(self, item, execute_text):
         if self.strip_ns(item.tag) == "action":
             if len(list(item)) == 1:
                 if item[0].text != execute_text:
                     item[0].text = execute_text
-                    self.dirty = True
+                    self.set_dirty()
         elif self.strip_ns(item.tag) == "menu":
             if item.get('execute') is not None:
                 if item.text != execute_text:
                     item.set('execute', execute_text)
-                    self.dirty = True
+                    self.set_dirty()
 
     def get_execute(self, item):
         if self.strip_ns(item.tag) == "action":
@@ -392,7 +404,7 @@ class Obxml2:
         if self.strip_ns(item.tag) == "action":
             old_action = item.get('name')
             item.set('name', action_text)
-            self.dirty = True
+            self.set_dirty()
             if (action_text != "Execute") and (old_action == "Execute"):
                 if (len(list(item)) == 1):
                     item.remove(item[0])
@@ -403,7 +415,7 @@ class Obxml2:
         elif self.strip_ns(item.tag) == "item":
             if len(list(item)) == 1:
                 self.set_action(item[0], action_text)
-                self.dirty = True
+                self.set_dirty()
 
     def get_action(self, item):
         if self.strip_ns(item.tag) == "action":
@@ -437,7 +449,7 @@ class Obxml2:
 
         if parent is not None:
             parent.remove(item)
-            self.dirty = True
+            self.set_dirty()
 
     def insert_node_below(self, item, node_tag, allow_root=False):
         inserted_item = None
@@ -445,14 +457,14 @@ class Obxml2:
             if allow_root:
                 self.root.append(ET.Element(node_tag))
                 inserted_item = list(self.root)[len(list(self.root)) - 1]
-                self.dirty = True
+                self.set_dirty()
         else:
             parent = self.get_parent(item)
             if (self.strip_ns(node_tag) == "menu" and (len(list(item)) == 0 or parent == self.root)) and (
                     item.get('label') is not None) and (item.get('execute') is None) and (allow_root is False):
                 item.append(ET.Element(node_tag))
                 inserted_item = list(item)[len(list(item)) - 1]
-                self.dirty = True
+                self.set_dirty()
             else:
                 parent = self.get_parent(item)
                 if self.strip_ns(
@@ -464,7 +476,7 @@ class Obxml2:
                     current_index = list(parent).index(item)
                     parent.insert(current_index + 1, ET.Element(node_tag))
                     inserted_item = list(parent)[current_index + 1]
-                    self.dirty = True
+                    self.set_dirty()
         return inserted_item
 
     def init_item(self, item):
@@ -601,7 +613,7 @@ class Obxml2:
                 previous_item = list(parent)[current_index - 1]
                 parent.remove(previous_item)
                 parent.insert(current_index, previous_item)
-                self.dirty = True
+                self.set_dirty()
 
     def move_down(self, item):
         parent = self.get_parent(item)
@@ -613,7 +625,7 @@ class Obxml2:
             if current_index < len(list(parent)) - 1:
                 parent.remove(item)
                 parent.insert(current_index + 1, item)
-                self.dirty = True
+                self.set_dirty()
 
 
 class Obmenu2Window(Gtk.ApplicationWindow):
@@ -624,7 +636,7 @@ class Obmenu2Window(Gtk.ApplicationWindow):
         self.set_gravity(Gdk.Gravity.CENTER)
         self.set_position(Gtk.WindowPosition.CENTER_ALWAYS)
 
-        self.omenu = Obxml2()
+        self.omenu = Obxml2(None, self.omenu_changed)
 
         home = str(Path.home())
         self.dotfile_menu_xml = home+'/.config/openbox/menu.xml'
@@ -1301,6 +1313,16 @@ class Obmenu2Window(Gtk.ApplicationWindow):
                                              self.get_iter_exe(store_iter),
                                              self.get_iter_object(store_iter)])
         self.update_input_fields()
+
+    def omenu_changed(self, changed):
+        if changed == True:
+            title = self.get_title()
+            if not title.endswith(" (*)"):
+                self.set_title(title + " (*)")
+        else:
+            title = self.get_title()
+            if title.endswith(" (*)"):
+                self.set_title( title[:-(len(" (*)"))] )
 
 
 class Application(Gtk.Application):
