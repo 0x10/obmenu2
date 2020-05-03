@@ -4,7 +4,7 @@ import xml.etree.ElementTree as ET
 
 import gi
 gi.require_version("Gtk", "3.0")
-from gi.repository import GLib, Gio, Gtk, GObject
+from gi.repository import GLib, Gio, Gtk, GObject, Gdk
 import sys
 import random
 import subprocess
@@ -621,6 +621,8 @@ class Obmenu2Window(Gtk.ApplicationWindow):
         super().__init__(*args, **kwargs)
         self.set_border_width(1)
         self.set_default_size(640, 640)
+        self.set_gravity(Gdk.Gravity.CENTER)
+        self.set_position(Gtk.WindowPosition.CENTER_ALWAYS)
 
         self.omenu = Obxml2()
 
