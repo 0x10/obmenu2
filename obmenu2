@@ -1,14 +1,13 @@
 #!/usr/bin/python3.7
-from xml.dom import minidom
+from pathlib import Path
+import subprocess
+import random
+import sys
 import xml.etree.ElementTree as ET
-
 import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import GLib, Gio, Gtk, GObject, Gdk
-import sys
-import random
-import subprocess
-from pathlib import Path
+
 
 # This would typically be its own file
 MENU_XML = """
@@ -449,7 +448,6 @@ class Obxml2:
             parent.remove(item)
             self.set_dirty()
 
-
     def insert_node_below(self, item, node_tag, allow_root=False):
         inserted_item = None
         if item is None:
@@ -644,7 +642,7 @@ class Obxml2:
 
 
 class Obmenu2Window(Gtk.ApplicationWindow):
-    def __init__(self, passed_filename, *args, **kwargs ):
+    def __init__(self, passed_filename, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.set_border_width(1)
         self.set_default_size(640, 640)
@@ -654,7 +652,7 @@ class Obmenu2Window(Gtk.ApplicationWindow):
         self.omenu = Obxml2(None, self.omenu_changed)
 
         home = str(Path.home())
-        self.dotfile_menu_xml = home+'/.config/openbox/menu.xml'
+        self.dotfile_menu_xml = home + '/.config/openbox/menu.xml'
         init_file = self.dotfile_menu_xml
 
         if passed_filename is not None and Path(passed_filename).is_file():
@@ -699,16 +697,16 @@ class Obmenu2Window(Gtk.ApplicationWindow):
         self.menu_toolbar.set_halign(Gtk.Align.START)
         self.menu_toolbar.set_hexpand(False)
 
-        for toolbar_item in [ [ "document-save", "Save", self.on_save_menu ],
-                              [ None, None, None ],
-                              [ None, "Add Menu", self.on_add_menu ],
-                              [ None, "Add Item", self.on_add_item ],
-                              [ None, "Add Separator", self.on_add_separator ],
-                              [ None, None, None ],
-                              [ "go-up", "Up", self.on_move_item_up ],
-                              [ "go-down", "Down", self.on_move_item_down ],
-                              [ None, None, None ],
-                              [ "edit-delete", "Delete", self.on_delete_item ] ]:
+        for toolbar_item in [["document-save", "Save", self.on_save_menu],
+                             [None, None, None],
+                             [None, "Add Menu", self.on_add_menu],
+                             [None, "Add Item", self.on_add_item],
+                             [None, "Add Separator", self.on_add_separator],
+                             [None, None, None],
+                             ["go-up", "Up", self.on_move_item_up],
+                             ["go-down", "Down", self.on_move_item_down],
+                             [None, None, None],
+                             ["edit-delete", "Delete", self.on_delete_item]]:
             if toolbar_item[2] is not None:
                 if toolbar_item[0] is not None:
                     icon = Gtk.Image.new_from_icon_name(toolbar_item[0], 24)
@@ -719,14 +717,14 @@ class Obmenu2Window(Gtk.ApplicationWindow):
                 button.set_expand(False)
                 button.set_homogeneous(False)
                 self.menu_toolbar.insert(
-                    button, 
+                    button,
                     len(self.menu_toolbar.get_children()))
             else:
                 separator = Gtk.SeparatorToolItem()
                 separator.set_expand(False)
                 separator.set_draw(True)
                 self.menu_toolbar.insert(
-                    separator, 
+                    separator,
                     len(self.menu_toolbar.get_children()))
 
         # creating the entry info fields
@@ -887,7 +885,6 @@ class Obmenu2Window(Gtk.ApplicationWindow):
         else:
             return False
 
-
     def get_selected_store_iter(self):
         selection = self.treeview.get_selection()
         _, paths = selection.get_selected_rows()
@@ -972,35 +969,53 @@ class Obmenu2Window(Gtk.ApplicationWindow):
         store_iter = self.get_selected_store_iter()
         if store_iter is not None:
             if self.get_iter_type(store_iter) == "item":
-                self.enable_entry(self.entry_edit_label, self.get_iter_label(store_iter))
+                self.enable_entry(
+                    self.entry_edit_label,
+                    self.get_iter_label(store_iter))
                 self.disable_entry(self.entry_edit_id)
                 self.set_combo_value(self.get_iter_action(store_iter))
                 if self.get_iter_action(store_iter) == "Execute":
-                    self.enable_entry(self.entry_edit_execute, self.get_iter_exe(store_iter))
+                    self.enable_entry(
+                        self.entry_edit_execute,
+                        self.get_iter_exe(store_iter))
                 else:
                     self.disable_entry(self.entry_edit_execute)
             elif self.get_iter_type(store_iter) == "menu":
                 if self.get_iter_action(store_iter) == "Link":
-                    self.disable_entry(self.entry_edit_label, self.get_iter_label(store_iter))
+                    self.disable_entry(
+                        self.entry_edit_label,
+                        self.get_iter_label(store_iter))
                 else:
-                    self.enable_entry(self.entry_edit_label, self.get_iter_label(store_iter))
-                self.enable_entry(self.entry_edit_id, self.omenu.get_id_string(self.get_iter_object(store_iter)))
+                    self.enable_entry(
+                        self.entry_edit_label,
+                        self.get_iter_label(store_iter))
+                self.enable_entry(
+                    self.entry_edit_id, self.omenu.get_id_string(
+                        self.get_iter_object(store_iter)))
                 self.disable_entry(self.entry_edit_execute)
                 self.set_combo_value(None)
             elif self.get_iter_type(store_iter) == "pipemenu":
-                self.enable_entry(self.entry_edit_label, self.get_iter_label(store_iter))
-                self.enable_entry(self.entry_edit_id, self.omenu.get_id_string(self.get_iter_object(store_iter)))
-                self.enable_entry(self.entry_edit_execute, self.get_iter_exe(store_iter))
+                self.enable_entry(
+                    self.entry_edit_label,
+                    self.get_iter_label(store_iter))
+                self.enable_entry(
+                    self.entry_edit_id, self.omenu.get_id_string(
+                        self.get_iter_object(store_iter)))
+                self.enable_entry(
+                    self.entry_edit_execute,
+                    self.get_iter_exe(store_iter))
                 self.set_combo_value(None)
             elif self.get_iter_type(store_iter) == "":
                 self.disable_entry(self.entry_edit_label)
                 self.disable_entry(self.entry_edit_id)
                 self.set_combo_value(self.get_iter_action(store_iter))
                 if self.get_iter_action(store_iter) == "Execute":
-                    self.enable_entry(self.entry_edit_execute, self.get_iter_exe(store_iter))
+                    self.enable_entry(
+                        self.entry_edit_execute,
+                        self.get_iter_exe(store_iter))
                 else:
                     self.disable_entry(self.entry_edit_execute)
-            else: #"separator"
+            else:  # "separator"
                 self.disable_entry(self.entry_edit_label)
                 self.disable_entry(self.entry_edit_id)
                 self.disable_entry(self.entry_edit_execute)
@@ -1010,7 +1025,8 @@ class Obmenu2Window(Gtk.ApplicationWindow):
             self.disable_entry(self.entry_edit_id)
             self.disable_entry(self.entry_edit_execute)
             self.set_combo_value(None)
-        self.search_edit_execute.set_sensitive(self.entry_edit_execute.get_sensitive())
+        self.search_edit_execute.set_sensitive(
+            self.entry_edit_execute.get_sensitive())
 
     def on_cursor_changed(self, selection):
         self.update_input_fields()
@@ -1218,7 +1234,7 @@ class Obmenu2Window(Gtk.ApplicationWindow):
                                             [label_update,
                                              self.get_iter_type(store_iter),
                                              self.get_iter_action(
-                                                store_iter),
+                                                 store_iter),
                                              self.get_iter_exe(store_iter),
                                              self.get_iter_object(store_iter)])
         self.update_input_fields()
@@ -1231,7 +1247,7 @@ class Obmenu2Window(Gtk.ApplicationWindow):
         else:
             title = self.get_title()
             if title.endswith(" (*)"):
-                self.set_title( title[:-(len(" (*)"))] )
+                self.set_title(title[:-(len(" (*)"))])
 
 
 class Application(Gtk.Application):
@@ -1277,7 +1293,7 @@ class Application(Gtk.Application):
                    ['add_item_pipemenu', self.on_action_addpipemenu],
                    ['add_item_link', self.on_action_addlink]]
         for signal in signals:
-            self.add_simple_action( signal[0], signal[1] )
+            self.add_simple_action(signal[0], signal[1])
 
         builder.connect_signals(self)
 
@@ -1337,7 +1353,7 @@ class Application(Gtk.Application):
             # Windows are associated with the application
             # when the last one is closed the application shuts down
             self.window = Obmenu2Window(
-                passed_filename = self.passed_filename,
+                passed_filename=self.passed_filename,
                 application=self,
                 title="obmenu2")
 
@@ -1358,7 +1374,10 @@ class Application(Gtk.Application):
         return 0
 
     def on_about(self, action, param):
-        about_dialog = Gtk.AboutDialog(parent=self.window, transient_for=self.window, modal=True)
+        about_dialog = Gtk.AboutDialog(
+            parent=self.window,
+            transient_for=self.window,
+            modal=True)
         about_dialog.set_program_name("obmenu2")
         about_dialog.set_version("0.9")
         about_dialog.set_copyright("Christian Kranz")
