@@ -329,7 +329,8 @@ class Obxml2:
         if len(list(action)) == 1:
             if self.strip_ns(
                     action[0].tag) == "execute" and action[0].text is not None:
-                execute_text = action[0].text.rstrip().lstrip()
+                action[0].text = action[0].text.rstrip().lstrip()
+                execute_text = action[0].text
             # elif parse the rest of the possible types
         menu_treestore.append(
             parent_iter, [
