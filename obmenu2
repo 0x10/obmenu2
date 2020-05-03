@@ -666,6 +666,7 @@ class Obmenu2Window(Gtk.ApplicationWindow):
             self.treeview.append_column(column)
 
         self.treeview.get_selection().connect("changed", self.on_cursor_changed)
+        self.treeview.connect("key-press-event", self.on_treeview_keypress)
 
         # creating menu buttons and connect it with the actions
         self.menu_toolbar = Gtk.Toolbar()
@@ -1053,6 +1054,10 @@ class Obmenu2Window(Gtk.ApplicationWindow):
 
     def on_cursor_changed(self, selection):
         self.update_input_fields()
+
+    def on_treeview_keypress(self, widget, ev):
+        if ev.keyval == Gdk.KEY_Delete and ev.type == Gdk.EventType.KEY_PRESS:
+            self.on_delete_item()
 
     def request_discard(self):
         dialog = Gtk.MessageDialog(
