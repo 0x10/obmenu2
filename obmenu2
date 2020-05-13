@@ -1089,6 +1089,8 @@ class Obmenu2Window(Gtk.ApplicationWindow):
         response = dialog.run()
         if response == Gtk.ResponseType.OK:
             # load selected
+            self.treeview.get_selection().unselect_all()
+            self.treeview.collapse_all()
             self.omenu.open(dialog.get_filename())
             self.menu_treestore.clear()
             self.omenu.parse(self.menu_treestore)
