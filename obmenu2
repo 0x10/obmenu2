@@ -359,6 +359,12 @@ class Obxml2:
                 return link_orig_label
             else:
                 return link.get('label')
+        elif self.strip_ns(link.tag) == "action":
+            parent_item = self.get_parent(link)
+            if (len(list(parent_item)) == 1):
+                return self.get_label( parent_item )
+            else:
+                return link.get('label')
         else:
             return link.get('label')
 
@@ -399,20 +405,20 @@ class Obxml2:
 
     def set_action(self, item, action_text):
         if self.strip_ns(item.tag) == "action":
-            old_action = item.get('name')
-            item.set('name', action_text)
-            self.set_dirty()
-            if (action_text != "Execute") and (old_action == "Execute"):
-                if (len(list(item)) == 1):
-                    item.remove(item[0])
-            if (action_text == "Execute") and (old_action != "Execute"):
-                init_exe = ET.Element(self.add_ns("execute"))
-                init_exe.text = "command"
-                item.append(init_exe)
+            if item.get('name') != action_text:
+                old_action = item.get('name')
+                item.set('name', action_text)
+                self.set_dirty()
+                if (action_text != "Execute") and (old_action == "Execute"):
+                    if (len(list(item)) == 1):
+                        item.remove(item[0])
+                if (action_text == "Execute") and (old_action != "Execute"):
+                    init_exe = ET.Element(self.add_ns("execute"))
+                    init_exe.text = "command"
+                    item.append(init_exe)
         elif self.strip_ns(item.tag) == "item":
             if len(list(item)) == 1:
                 self.set_action(item[0], action_text)
-                self.set_dirty()
 
     def get_action(self, item):
         if self.strip_ns(item.tag) == "action":
@@ -420,6 +426,9 @@ class Obxml2:
         elif self.strip_ns(item.tag) == "item":
             if len(list(item)) == 1:
                 return item[0].get('name')
+        elif self.strip_ns(item.tag) == "menu":
+            if item.get('execute') is not None:
+                return "Execute"
         return None
 
     def find_in_children(self, submenu, node):
@@ -1142,6 +1151,30 @@ class Obmenu2Window(Gtk.ApplicationWindow):
                 operation(None, self.menu_treestore, None)
         self.update_input_fields()
 
+    def perform_on_selection(self, operation, argument):
+        store_iter = self.get_selected_store_iter()
+        if store_iter is not None:
+            store_iter_obj = self.get_iter_object(store_iter)
+            if store_iter_obj is not None:
+                operation(store_iter_obj, argument)
+                label_text = ""
+                execution_text = ""
+                action_text = ""
+                if self.omenu.get_label(store_iter_obj) is not None:
+                    label_text = self.omenu.get_label(store_iter_obj)
+                if self.omenu.get_execute(store_iter_obj) is not None:
+                    execution_text = self.omenu.get_execute(
+                        store_iter_obj)
+                if self.omenu.get_action(store_iter_obj) is not None:
+                    action_text = self.omenu.get_action(store_iter_obj)
+                self.menu_treestore.set_row(store_iter,
+                                            [label_text,
+                                             self.get_iter_type(store_iter),
+                                             action_text,
+                                             execution_text,
+                                             self.get_iter_object(store_iter)])
+                self.update_input_fields()
+
     def on_move_item_up(self, widget=None):
         self.perform_at_selection(self.omenu.swap_up)
 
@@ -1173,73 +1206,18 @@ class Obmenu2Window(Gtk.ApplicationWindow):
         print('will add pipe menu with dir listening')
 
     def on_label_changed(self, widget):
-        store_iter = self.get_selected_store_iter()
-        if store_iter is not None:
-            self.omenu.set_label(
-                self.get_iter_object(store_iter),
-                widget.get_text())
-            self.menu_treestore.set_row(store_iter,
-                                        [widget.get_text(),
-                                         self.get_iter_type(store_iter),
-                                         self.get_iter_action(store_iter),
-                                         self.get_iter_exe(store_iter),
-                                         self.get_iter_object(store_iter)])
+        self.perform_on_selection(self.omenu.set_label, widget.get_text())
 
     def on_execution_changed(self, widget):
-        store_iter = self.get_selected_store_iter()
-        if store_iter is not None:
-            self.omenu.set_execute(
-                self.get_iter_object(store_iter),
-                widget.get_text())
-            self.menu_treestore.set_row(store_iter,
-                                        [self.get_iter_label(store_iter),
-                                         self.get_iter_type(store_iter),
-                                         self.get_iter_action(store_iter),
-                                         widget.get_text(),
-                                         self.get_iter_object(store_iter)])
+        self.perform_on_selection(self.omenu.set_execute, widget.get_text())
 
     def on_action_changed(self, widget):
-        store_iter = self.get_selected_store_iter()
         combo_iter = widget.get_active_iter()
-        if (store_iter is not None) and (combo_iter is not None):
-            model = widget.get_model()
-            action_name = model[combo_iter][0]
-            if action_name != self.get_iter_action(store_iter):
-                self.omenu.set_action(
-                    self.get_iter_object(store_iter), action_name)
-                if self.omenu.get_action(
-                        self.get_iter_object(store_iter)) is not None:
-                    execution_text = ""
-                    if self.omenu.get_execute(
-                            self.get_iter_object(store_iter)) is not None:
-                        execution_text = self.omenu.get_execute(
-                            self.get_iter_object(store_iter))
-                    self.menu_treestore.set_row(store_iter,
-                                                [self.get_iter_label(store_iter),
-                                                 self.get_iter_type(
-                                                    store_iter),
-                                                 action_name,
-                                                 execution_text,
-                                                 self.get_iter_object(store_iter)])
-        self.update_input_fields()
+        if combo_iter is not None:
+            self.perform_on_selection(self.omenu.set_action, widget.get_model()[combo_iter][0])
 
     def on_id_changed(self, widget):
-        store_iter = self.get_selected_store_iter()
-        if store_iter is not None:
-            self.omenu.set_id(
-                self.get_iter_object(store_iter),
-                widget.get_text())
-            label_update = self.omenu.get_label(
-                self.get_iter_object(store_iter))
-            if label_update is not None:
-                self.menu_treestore.set_row(store_iter,
-                                            [label_update,
-                                             self.get_iter_type(store_iter),
-                                             self.get_iter_action(
-                                                 store_iter),
-                                             self.get_iter_exe(store_iter),
-                                             self.get_iter_object(store_iter)])
-        self.update_input_fields()
+        self.perform_on_selection(self.omenu.set_id, widget.get_text())
 
     def omenu_changed(self, changed):
         if changed == True:
