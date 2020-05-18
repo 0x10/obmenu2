@@ -4,9 +4,10 @@ import subprocess
 import random
 import sys
 import xml.etree.ElementTree as ET
+import traceback
 import gi
 gi.require_version("Gtk", "3.0")
-from gi.repository import GLib, Gio, Gtk, GObject, Gdk
+from gi.repository import GLib, Gio, Gtk, GObject, Gdk, GdkPixbuf
 
 
 # This would typically be its own file
@@ -191,6 +192,10 @@ def reconfigure_openbox():
     subprocess.run(["openbox", "--reconfigure"])
 
 
+def print_stack():
+    for line in traceback.format_stack():
+        print(line.strip())
+
 class Obxml2:
     def __init__(self, filename=None, change_observer=None):
         ET.register_namespace('', "http://openbox.org/")
@@ -276,28 +281,29 @@ class Obxml2:
                     self.parse_pipemenu(menu_treestore, parent_iter, child)
                 else:
                     piter = menu_treestore.append(
-                        parent_iter, [
-                            child.get('label'), self.strip_ns(
-                                child.tag), "", "", child])
+                        parent_iter, [ child.get('icon'),
+                                       child.get('label'), 
+                                       self.strip_ns(child.tag), 
+                                       "", "", child])
                     self.parse_submenu(menu_treestore, piter, child)
             elif self.strip_ns(child.tag) == "item":
                 self.parse_item(menu_treestore, parent_iter, child)
             else:
                 menu_treestore.append(
                     parent_iter, [
-                        child.get('label'), self.strip_ns(
+                        "", child.get('label'), self.strip_ns(
                             child.tag), "", "", child])
 
     def parse_pipemenu(self, menu_treestore, parent_iter, pipe):
         execute_text = pipe.get('execute').rstrip().lstrip()
         menu_treestore.append(
             parent_iter, [
-                pipe.get('label'), 'pipemenu', 'Execute', pipe.get('execute'), pipe])
+                pipe.get('icon'), pipe.get('label'), 'pipemenu', 'Execute', execute_text, pipe])
 
     def parse_link(self, menu_treestore, parent_iter, link):
         menu_treestore.append(
             parent_iter, [
-                self.get_label(link), self.strip_ns(
+                self.get_icon(link), self.get_label(link), self.strip_ns(
                     link.tag), "Link", "", link])
 
     def parse_item(self, menu_treestore, parent_iter, item):
@@ -306,6 +312,7 @@ class Obxml2:
                 self.parse_action(
                     menu_treestore,
                     parent_iter,
+                    item.get('icon'),
                     item.get('label'),
                     self.strip_ns(
                         item.tag),
@@ -313,18 +320,19 @@ class Obxml2:
         elif (len(list(item)) == 0):
             piter = menu_treestore.append(
                 parent_iter, [
-                    item.get('label'), self.strip_ns(
+                    item.get('icon'), item.get('label'), self.strip_ns(
                         item.tag), "", "", item])
         else:
             piter = menu_treestore.append(
                 parent_iter, [
-                    item.get('label'), self.strip_ns(
+                    item.get('icon'), item.get('label'), self.strip_ns(
                         item.tag), "Multiple Execute", "", item])
             for action in item:
-                self.parse_action(menu_treestore, piter, "", "", action)
+                self.parse_action(menu_treestore, piter, "", "", "", action)
 
     def parse_action(self, menu_treestore, parent_iter,
-                     item_label, item_type, action):
+                     item_icon, item_label, 
+                     item_type, action):
         execute_text = ""
         if len(list(action)) == 1:
             if self.strip_ns(
@@ -333,8 +341,9 @@ class Obxml2:
                 execute_text = action[0].text
             # elif parse the rest of the possible types
         menu_treestore.append(
-            parent_iter, [
-                item_label, item_type, action.get('name'), execute_text, action])
+            parent_iter, [ item_icon, item_label, 
+                           item_type, action.get('name'), 
+                           execute_text, action])
 
     def get_id_string(self, item):
         if self.strip_ns(item.tag) == "menu":
@@ -348,15 +357,27 @@ class Obxml2:
                 item.set('id', id_string)
                 self.set_dirty()
 
+    def resolve_link(self, link):
+        for menu in self.xml.iter(self.add_ns("menu")):
+            if (menu.get('id') == link.get('id')
+                    and menu.get('label') is not None):
+                return menu
+        return None
+
+    def is_menu(self, item):
+        return self.strip_ns(item.tag) == "menu"
+
+    def is_link(self, item):
+        return self.is_menu(item) and item.get('label') is None
+
     def get_label(self, link):
         if self.strip_ns(link.tag) == "menu":
             if link.get('label') is None:
                 link_orig_label = "???"
 
-                for menu in self.xml.iter(self.add_ns("menu")):
-                    if (menu.get('id') == link.get('id')
-                            and menu.get('label') is not None):
-                        link_orig_label = menu.get('label')
+                resolved_link = self.resolve_link(link)
+                if resolved_link is not None:
+                    link_orig_label = resolved_link.get('label')
                 return link_orig_label
             else:
                 return link.get('label')
@@ -433,6 +454,28 @@ class Obxml2:
             elif item.get('label') is None:
                 return "Link"
         return None
+
+    def get_icon(self, item):
+        if self.strip_ns(item.tag) == "action":
+            parent = self.get_parent(item)
+            if (len(list(parent)) == 1):
+                return self.get_icon(parent)
+            else:
+                return None
+        elif self.strip_ns(item.tag) == "menu" and item.get('label') is None:
+            resolved_link = self.resolve_link(item)
+            if resolved_link is not None:
+                return resolved_link.get('icon')
+        else:
+            return item.get('icon')
+
+    def set_icon(self, item, icon_text):
+        if self.strip_ns(item.tag) == "item" or self.strip_ns(item.tag) == "menu":
+            item.set('icon', icon_text)
+            self.set_dirty()
+        elif self.strip_ns(item.tag) == "action":
+            self.set_icon(self.get_parent(item), icon_text)
+            
 
     def find_in_children(self, submenu, node):
         for child in submenu:
@@ -563,7 +606,7 @@ class Obxml2:
         if separator_node is not None:
             menu_treestore.insert_after(
                 None, menu_treestore_iter, [
-                    self.get_label(separator_node), self.strip_ns(
+                    "", self.get_label(separator_node), self.strip_ns(
                         separator_node.tag), "", "", separator_node])
 
     def add_item(self, item, menu_treestore, menu_treestore_iter):
@@ -571,7 +614,7 @@ class Obxml2:
         if item_node is not None:
             menu_treestore.insert_after(None,
                                         menu_treestore_iter,
-                                        [self.get_label(item_node),
+                                        ["icon", self.get_label(item_node),
                                          self.strip_ns(item_node.tag),
                                             item_node[0].get('name'),
                                             item_node[0][0].text.rstrip(
@@ -589,20 +632,21 @@ class Obxml2:
                 item.append(init_action)
                 menu_treestore.set_row(
                     menu_treestore_iter, [
-                        item.get('label'), self.strip_ns(
+                        "icon", item.get('label'), self.strip_ns(
                             item.tag), "Multiple Execute", "", item])
                 for action in item:
                     self.parse_action(
-                        menu_treestore, menu_treestore_iter, "", "", action)
+                        menu_treestore, menu_treestore_iter, "", "", "", action)
             elif (len(list(item)) == 0):
                 item.append(init_action)
                 menu_treestore.set_row(
                     menu_treestore_iter, [
-                        item.get('label'), self.strip_ns(
-                            item.tag), "Execute", item[0][0].text.rstrip().lstrip(), item[0]])
+                        "icon", item.get('label'), 
+                        self.strip_ns(item.tag), "Execute", 
+                        item[0][0].text.rstrip().lstrip(), item[0]])
             else:
                 item.append(init_action)
-                self.parse_action(menu_treestore, menu_treestore_iter, "", "", list(item)[
+                self.parse_action(menu_treestore, menu_treestore_iter, "", "", "", list(item)[
                                   len(list(item)) - 1])
         elif self.strip_ns(item.tag) == "action":
             parent = self.get_parent(item)
@@ -617,23 +661,25 @@ class Obxml2:
         if link_node is not None:
             menu_treestore.insert_after(
                 None, menu_treestore_iter, [
-                    self.get_label(link_node), self.strip_ns(
-                        link_node.tag), "Link", "", link_node])
+                    "icon", self.get_label(link_node), 
+                    self.strip_ns(link_node.tag), 
+                    "Link", "", link_node])
 
     def add_pipemenu(self, item, menu_treestore, menu_treestore_iter):
         node = self.insert_pipe_below(item)
         if node is not None:
             menu_treestore.insert_after(
                 None, menu_treestore_iter, [
-                    self.get_label(node), 'pipemenu', "Execute", node.get('execute'), node])
+                    "icon", self.get_label(node), 'pipemenu', "Execute", node.get('execute'), node])
 
     def add_menu(self, item, menu_treestore, menu_treestore_iter):
         node = self.insert_menu_below(item)
         if node is not None:
             piter = menu_treestore.insert_after(
                 None, menu_treestore_iter, [
-                    self.get_label(node), self.strip_ns(
-                        node.tag), "", "", node])
+                    "icon", self.get_label(node), 
+                    self.strip_ns(node.tag),
+                    "", "", node])
             self.parse_item(menu_treestore, piter, node[0])
 
     def remove_item(self, item, menu_treestore, menu_treestore_iter):
@@ -683,7 +729,7 @@ class Obmenu2Window(Gtk.ApplicationWindow):
 
         # Creating the ListStore model
         self.menu_treestore = Gtk.TreeStore(
-            str, str, str, str, GObject.TYPE_PYOBJECT)
+            str, str, str, str, str, GObject.TYPE_PYOBJECT)
         self.omenu.parse(self.menu_treestore)
 
         self.current_filter_language = None
@@ -696,10 +742,20 @@ class Obmenu2Window(Gtk.ApplicationWindow):
         for i, column_title in enumerate(
             ["Label", "Type", "Action", "Execute"]
         ):
-            renderer = Gtk.CellRendererText()
-            column = Gtk.TreeViewColumn(column_title, renderer, text=i)
-            column.set_sizing(Gtk.TreeViewColumnSizing.AUTOSIZE)
-            self.treeview.append_column(column)
+            if column_title == "Label":
+                px_renderer = Gtk.CellRendererPixbuf()
+                px_column = Gtk.TreeViewColumn(column_title)
+                px_column.pack_start(px_renderer, False)
+                txt_renderer = Gtk.CellRendererText()
+                px_column.pack_start(txt_renderer, False)
+                px_column.set_cell_data_func(px_renderer, self.get_tree_cell_pixbuf)
+                px_column.set_cell_data_func(txt_renderer, self.get_tree_cell_text)
+                self.treeview.append_column(px_column)
+            else:
+                renderer = Gtk.CellRendererText()
+                column = Gtk.TreeViewColumn(column_title, renderer, text=i+1)
+                column.set_sizing(Gtk.TreeViewColumnSizing.AUTOSIZE)
+                self.treeview.append_column(column)
 
         self.treeview.get_selection().connect("changed", self.on_cursor_changed)
         self.treeview.connect("key-press-event", self.on_treeview_keypress)
@@ -740,7 +796,15 @@ class Obmenu2Window(Gtk.ApplicationWindow):
                     len(self.menu_toolbar.get_children()))
 
         # creating the entry info fields
-        self.label_edit_label = Gtk.Label(label="Label", xalign=0)
+        self.icon_edit_img = Gtk.Image()
+
+        self.icon_edit_button = Gtk.Button(xalign=0.5, yalign=1)
+        self.icon_edit_button.set_label("No Icon")
+        self.icon_edit_button.connect( "clicked", self.on_icon_search_clicked)
+        self.icon_edit_button.set_sensitive(False)
+            
+
+        self.label_edit_label = Gtk.Label(label="Label/Icon", xalign=0)
         self.label_edit_label.set_margin_start(20)
         self.label_edit_label.set_margin_end(6)
         self.label_edit_label.set_hexpand(False)
@@ -823,7 +887,13 @@ class Obmenu2Window(Gtk.ApplicationWindow):
             self.entry_edit_label,
             self.label_edit_label,
             Gtk.PositionType.RIGHT,
-            2,
+            1,
+            1)
+        self.grid.attach_next_to(
+            self.icon_edit_button,
+            self.entry_edit_label,
+            Gtk.PositionType.RIGHT,
+            1,
             1)
 
         self.grid.attach_next_to(
@@ -873,6 +943,16 @@ class Obmenu2Window(Gtk.ApplicationWindow):
 
         self.show_all()
 
+    def get_tree_cell_text(self, col, cell, model, iter, user_data):
+        cell.set_property('text', model.get_value(iter, 1))
+
+    def get_tree_cell_pixbuf(self, col, cell, model, iter, user_data):
+        icon_filename = model.get_value(iter, 0)
+        if icon_filename is not None and Path(icon_filename).is_file():
+            cell.set_property('pixbuf', GdkPixbuf.Pixbuf.new_from_file_at_size(icon_filename, 24, 24))
+        else:
+            cell.set_property('pixbuf', None)
+
     # Override the default handler for the delete-event signal
     def do_delete_event(self, event):
         if self.omenu.is_dirty() == True:
@@ -906,22 +986,24 @@ class Obmenu2Window(Gtk.ApplicationWindow):
         return iter
 
     def get_iter_object(self, store_iter):
-        return self.menu_treestore.get_value(store_iter, 4)
+        return self.menu_treestore.get_value(store_iter, 5)
 
-    def get_iter_label(self, store_iter):
+    def get_iter_icon_name(self, store_iter):
         return self.menu_treestore.get_value(store_iter, 0)
 
-    def get_iter_type(self, store_iter):
+    def get_iter_label(self, store_iter):
         return self.menu_treestore.get_value(store_iter, 1)
 
-    def get_iter_action(self, store_iter):
+    def get_iter_type(self, store_iter):
         return self.menu_treestore.get_value(store_iter, 2)
 
-    def get_iter_exe(self, store_iter):
+    def get_iter_action(self, store_iter):
         return self.menu_treestore.get_value(store_iter, 3)
 
+    def get_iter_exe(self, store_iter):
+        return self.menu_treestore.get_value(store_iter, 4)
+
     def on_search_execute_clicked(self, widget):
-        """ serach clicked """
         dialog = Gtk.FileChooserDialog(
             title="Please choose a file",
             parent=self,
@@ -938,6 +1020,57 @@ class Obmenu2Window(Gtk.ApplicationWindow):
             self.entry_edit_execute.set_text(dialog.get_filename())
 
         dialog.destroy()
+
+
+    def on_icon_search_clicked(self, widget):
+        dialog = Gtk.FileChooserDialog(
+            title="Please choose a file",
+            parent=self,
+            action=Gtk.FileChooserAction.OPEN,
+        )
+        dialog.add_buttons("Clear Icon", 
+                           23,
+                           Gtk.STOCK_CANCEL,
+                           Gtk.ResponseType.CANCEL,
+                           Gtk.STOCK_OK,
+                           Gtk.ResponseType.OK)
+        self.add_filter_image(dialog)
+
+        response = dialog.run()
+        if response == Gtk.ResponseType.OK:
+            self.perform_on_selection(self.omenu.set_icon, dialog.get_filename())
+            self.reload_icon_button()
+        elif response == 23:
+            store_iter = self.get_selected_store_iter()
+            if self.get_iter_icon_name(store_iter) is not None:
+                if self.get_iter_icon_name(store_iter) != "":
+                    self.perform_on_selection(self.omenu.set_icon, "")
+            self.reload_icon_button()
+            
+        dialog.destroy()
+
+    def add_filter_image(self, dialog):
+        filter_png = Gtk.FileFilter()
+        filter_png.set_name("PNG Images")
+        filter_png.add_mime_type("image/png")
+        dialog.add_filter(filter_png)
+        filter_jpg = Gtk.FileFilter()
+        filter_jpg.set_name("JPEG Images")
+        filter_jpg.add_mime_type("image/jpeg")
+        dialog.add_filter(filter_jpg)
+        filter_svg = Gtk.FileFilter()
+        filter_svg.set_name("SVG Images")
+        filter_svg.add_mime_type("image/svg+xml")
+        filter_svg.add_pattern("*.svg*")
+        dialog.add_filter(filter_svg)
+        filter_xpm = Gtk.FileFilter()
+        filter_xpm.set_name("XPM Images")
+        filter_xpm.add_mime_type("image/x-xpixmap")
+        dialog.add_filter(filter_xpm)
+        filter_gif = Gtk.FileFilter()
+        filter_gif.set_name("GIF Images")
+        filter_gif.add_mime_type("image/gif")
+        dialog.add_filter(filter_gif)
 
     def add_filter_any(self, dialog):
         filter_any = Gtk.FileFilter()
@@ -976,6 +1109,28 @@ class Obmenu2Window(Gtk.ApplicationWindow):
     def enable_entry(self, entry_edit, value):
         entry_edit.set_text(value)
         entry_edit.set_sensitive(True)
+
+    def reload_icon_button(self):
+        store_iter = self.get_selected_store_iter()
+        if store_iter is not None:
+            icon_name = self.get_iter_icon_name(store_iter)
+            if icon_name != "" and icon_name is not None:
+                if Path(icon_name).is_file():
+                    pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_size(icon_name, 24, 24)
+                    if pixbuf is not None:
+                        self.icon_edit_img.set_from_pixbuf(pixbuf)
+                        self.icon_edit_button.set_image(self.icon_edit_img)
+                        self.icon_edit_button.set_label("")
+                        self.icon_edit_button.set_always_show_image(True)
+                else:
+                    self.icon_edit_button.set_image(None)
+                    self.icon_edit_button.set_label("No Icon")
+                    self.icon_edit_button.set_always_show_image(False)
+            else:
+                self.icon_edit_button.set_image(None)
+                self.icon_edit_button.set_label("No Icon")
+                self.icon_edit_button.set_always_show_image(False)
+
 
     def update_input_fields(self):
         store_iter = self.get_selected_store_iter()
@@ -1032,6 +1187,9 @@ class Obmenu2Window(Gtk.ApplicationWindow):
                 self.disable_entry(self.entry_edit_id)
                 self.disable_entry(self.entry_edit_execute)
                 self.set_combo_value(None)
+
+            self.reload_icon_button()
+            
         else:
             self.disable_entry(self.entry_edit_label)
             self.disable_entry(self.entry_edit_id)
@@ -1039,6 +1197,9 @@ class Obmenu2Window(Gtk.ApplicationWindow):
             self.set_combo_value(None)
         self.search_edit_execute.set_sensitive(
             self.entry_edit_execute.get_sensitive())
+        self.icon_edit_button.set_sensitive(
+            self.entry_edit_label.get_sensitive())
+
 
     def on_cursor_changed(self, selection):
         self.update_input_fields()
@@ -1046,6 +1207,8 @@ class Obmenu2Window(Gtk.ApplicationWindow):
     def on_treeview_keypress(self, widget, ev):
         if ev.keyval == Gdk.KEY_Delete and ev.type == Gdk.EventType.KEY_PRESS:
             self.on_delete_item()
+        #elif ev.keyval == Gdk.KEY_S and ev.state == Gdk.ModifierType.CONTROL_MASK:
+        #    self.on_save_menu()
 
     def request_discard(self):
         dialog = Gtk.MessageDialog(
@@ -1142,9 +1305,28 @@ class Obmenu2Window(Gtk.ApplicationWindow):
 
         dialog.destroy()
 
+
+    def find_links(self, search_id, store_iter):
+        links_found = []
+        while store_iter is not None:
+            store_iter_obj = self.get_iter_object(store_iter)
+            menu_id = self.omenu.get_id_string(store_iter_obj)
+            if menu_id == search_id and self.omenu.is_link(store_iter_obj):
+                links_found.append(store_iter)
+            if self.menu_treestore.iter_has_child(store_iter):
+                child_iter = self.menu_treestore.iter_children(store_iter)
+                child_links = self.find_links(search_id, child_iter)
+                if len(child_links) > 0:
+                    links_found.extend(child_links)
+            store_iter = self.menu_treestore.iter_next(store_iter)
+                
+        return links_found
+
+
     def perform_at_selection(self, operation, allow_root=False):
         store_iter = self.get_selected_store_iter()
         if store_iter is not None:
+            #TODO: self.push_to_undo(UndoItem(self.menu_treestore, self.omenu))
             operation(
                 self.get_iter_object(store_iter),
                 self.menu_treestore,
@@ -1163,6 +1345,7 @@ class Obmenu2Window(Gtk.ApplicationWindow):
                 label_text = ""
                 execution_text = ""
                 action_text = ""
+                icon_text = ""
                 if self.omenu.get_label(store_iter_obj) is not None:
                     label_text = self.omenu.get_label(store_iter_obj)
                 if self.omenu.get_execute(store_iter_obj) is not None:
@@ -1170,13 +1353,26 @@ class Obmenu2Window(Gtk.ApplicationWindow):
                         store_iter_obj)
                 if self.omenu.get_action(store_iter_obj) is not None:
                     action_text = self.omenu.get_action(store_iter_obj)
+                if self.omenu.get_icon(store_iter_obj) is not None:
+                    icon_text = self.omenu.get_icon(store_iter_obj)
                 self.menu_treestore.set_row(store_iter,
-                                            [label_text,
+                                            [icon_text,
+                                             label_text,
                                              self.get_iter_type(store_iter),
                                              action_text,
                                              execution_text,
                                              self.get_iter_object(store_iter)])
                 self.update_input_fields()
+                if self.omenu.is_menu(store_iter_obj) == True and self.omenu.is_link(store_iter_obj) == False:
+                    links = self.find_links(self.omenu.get_id_string(store_iter_obj), self.menu_treestore.get_iter_first())
+                    for link_iter in links:
+                        self.menu_treestore.set_row(link_iter,
+                                                    [icon_text,
+                                                     label_text,
+                                                     self.get_iter_type(link_iter),
+                                                     self.get_iter_action(link_iter),
+                                                     self.get_iter_exe(link_iter),
+                                                     self.get_iter_object(link_iter)])
 
     def on_move_item_up(self, widget=None):
         self.perform_at_selection(self.omenu.swap_up)
