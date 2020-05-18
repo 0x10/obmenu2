@@ -12,5 +12,6 @@ It was written from scratch and does not share any code with the old obmenu tool
 # Features
 * Interactively edit the menu.xml and add new menus and menu-items
 * add multiple execution actions to a menu item
+* add icons to you menus and items
 * add multiple menus and link them
 * add pipe menus and much more.
