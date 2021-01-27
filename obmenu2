@@ -1,4 +1,4 @@
-#!/usr/bin/python3.7
+#!/usr/bin/python3
 from pathlib import Path
 import subprocess
 import random
