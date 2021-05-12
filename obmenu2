@@ -214,14 +214,17 @@ class Obxml2:
             return "{http://openbox.org/}" + tag
 
     def check_default_ns(self, elem):
-        if "{http://openbox.org/}" not in elem.tag:
+        if "{http://openbox.org/" not in elem.tag:
             self.import_empty_ns = True
 
     def open(self, filename):
         self.import_empty_ns = False
         try:
             self.xml = ET.parse(filename)
-        except ET.ParseError:
+        except ET.ParseError as err:
+#            lineno, column = err.position
+#            err.msg = '{}\n{}\n{}'.format(err, lineno, column)
+#            raise
             self.xml = None
 
         if self.xml is not None:
@@ -229,11 +232,13 @@ class Obxml2:
             self.check_default_ns(self.root)
 
             if self.strip_ns(self.root.tag) != "openbox_menu":
+                print('need to clear root tag not matching')
                 self.clear()
             else:
                 self.fname = filename
                 self.clear_dirty()
         else:
+            print('need to clear xml is none')
             self.clear()
 
     def save(self):
@@ -358,10 +363,11 @@ class Obxml2:
                 self.set_dirty()
 
     def resolve_link(self, link):
-        for menu in self.xml.iter(self.add_ns("menu")):
-            if (menu.get('id') == link.get('id')
-                    and menu.get('label') is not None):
-                return menu
+        for menu in self.root.iter():
+            if (self.strip_ns(menu.tag) == "menu"):
+                if (menu.get('id') == link.get('id')
+                        and menu.get('label') is not None):
+                    return menu
         return None
 
     def is_menu(self, item):
