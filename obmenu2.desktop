@@ -1,0 +1,12 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Openbox Menu Manager
+Keywords=openbox;menu;
+Comment=Tweak Openbox Menu
+Icon=obmenu2
+Exec=obmenu2 %f
+Categories=Settings;DesktopSettings;GTK;
+StartupNotify=true
+Terminal=false
+
